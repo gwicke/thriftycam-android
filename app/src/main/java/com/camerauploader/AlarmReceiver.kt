@@ -1,10 +1,8 @@
 package com.camerauploader
 
-import android.app.ActivityOptions
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat.startForegroundService
 
@@ -15,11 +13,27 @@ class AlarmReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        // Directly call the service intent
+        if (!SettingsManager.isRecordingEnabled(context)) {
+            Log.d(TAG, "Recording disabled — stopping alarm chain")
+            return  // do not reschedule; chain stops here
+        }
+
+        AlarmScheduler.scheduleNext(context)  // always reschedule before any early return
+
+        if (!isWithinRecordingWindow(context)) {
+            Log.d(TAG, "Outside daylight window — skipping capture")
+            return
+        }
+
         val serviceIntent = Intent(context, CameraUploaderService::class.java)
         startForegroundService(context, serviceIntent)
+    }
 
-        // Schedule the next iteration
-        AlarmScheduler.scheduleNext(context)
+    private fun isWithinRecordingWindow(context: Context): Boolean {
+        if (!SettingsManager.isDaylightOnly(context)) return true
+        if (!SettingsManager.hasLocation(context)) return true  // no location yet: allow capture
+        val window = SettingsManager.getCachedDaylightWindow(context) ?: return true  // no cache: allow
+        val now = System.currentTimeMillis()
+        return now >= window.first && now < window.second
     }
 }

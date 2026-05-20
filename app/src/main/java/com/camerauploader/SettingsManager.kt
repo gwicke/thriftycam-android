@@ -20,6 +20,18 @@ object SettingsManager {
     private const val KEY_AUTH_PASSWORD = "auth_password"
     private const val KEY_UPLOAD_MODE   = "upload_mode"
 
+    private const val KEY_RECORDING_ENABLED     = "recording_enabled"
+    private const val KEY_DAILY_DIR_MODE        = "daily_dir_mode"
+    private const val KEY_DAILY_DIR_MKCOL       = "daily_dir_mkcol"
+    private const val KEY_DAYLIGHT_ONLY         = "daylight_only"
+    private const val KEY_DAYLIGHT_OFFSET_MIN   = "daylight_offset_minutes"
+    private const val KEY_DAYLIGHT_WINDOW_START = "daylight_window_start_ms"
+    private const val KEY_DAYLIGHT_WINDOW_END   = "daylight_window_end_ms"
+    private const val KEY_AV1_CRF              = "av1_crf"
+    private const val KEY_AV1_ENC_MODE         = "av1_enc_mode"
+    private const val KEY_LOCATION_LAT         = "location_lat"
+    private const val KEY_LOCATION_LON         = "location_lon"
+
     const val DEFAULT_INTERVAL_SECONDS = 300
 
     /** Upload modes selectable from the settings dialog. */
@@ -105,6 +117,86 @@ object SettingsManager {
         )
         return "Basic $encoded"
     }
+
+    // ── Recording enabled ─────────────────────────────────────────────────────
+
+    fun isRecordingEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_RECORDING_ENABLED, true)
+
+    fun setRecordingEnabled(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_RECORDING_ENABLED, v) }
+
+    // ── Day-by-day recording ──────────────────────────────────────────────────
+
+    fun isDailyDirMode(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DAILY_DIR_MODE, false)
+
+    fun setDailyDirMode(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_DAILY_DIR_MODE, v) }
+
+    fun isDailyDirMkcol(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DAILY_DIR_MKCOL, false)
+
+    fun setDailyDirMkcol(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_DAILY_DIR_MKCOL, v) }
+
+    // ── Daylight-hours recording ──────────────────────────────────────────────
+
+    fun isDaylightOnly(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DAYLIGHT_ONLY, false)
+
+    fun setDaylightOnly(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_DAYLIGHT_ONLY, v) }
+
+    fun getDaylightOffsetMinutes(context: Context): Int =
+        prefs(context).getInt(KEY_DAYLIGHT_OFFSET_MIN, 0)
+
+    fun setDaylightOffsetMinutes(context: Context, minutes: Int) =
+        prefs(context).edit { putInt(KEY_DAYLIGHT_OFFSET_MIN, minutes) }
+
+    /** Cached sunrise/sunset window as epoch-ms boundaries. Null = not yet computed. */
+    fun getCachedDaylightWindow(context: Context): Pair<Long, Long>? {
+        val start = prefs(context).getLong(KEY_DAYLIGHT_WINDOW_START, -1L)
+        val end   = prefs(context).getLong(KEY_DAYLIGHT_WINDOW_END,   -1L)
+        return if (start >= 0L && end >= 0L) Pair(start, end) else null
+    }
+
+    fun setCachedDaylightWindow(context: Context, windowStart: Long, windowEnd: Long) =
+        prefs(context).edit {
+            putLong(KEY_DAYLIGHT_WINDOW_START, windowStart)
+            putLong(KEY_DAYLIGHT_WINDOW_END,   windowEnd)
+        }
+
+    // ── Location (cached once for sunrise/sunset) ─────────────────────────────
+
+    fun getLocationLat(context: Context): Float =
+        prefs(context).getFloat(KEY_LOCATION_LAT, Float.NaN)
+
+    fun getLocationLon(context: Context): Float =
+        prefs(context).getFloat(KEY_LOCATION_LON, Float.NaN)
+
+    fun setLocation(context: Context, lat: Float, lon: Float) =
+        prefs(context).edit {
+            putFloat(KEY_LOCATION_LAT, lat)
+            putFloat(KEY_LOCATION_LON, lon)
+        }
+
+    fun hasLocation(context: Context): Boolean =
+        !getLocationLat(context).isNaN()
+
+    // ── AV1 encoding parameters ───────────────────────────────────────────────
+
+    fun getAv1Crf(context: Context): Int =
+        prefs(context).getInt(KEY_AV1_CRF, 37)
+
+    fun setAv1Crf(context: Context, crf: Int) =
+        prefs(context).edit { putInt(KEY_AV1_CRF, crf.coerceIn(0, 63)) }
+
+    fun getAv1EncMode(context: Context): Int =
+        prefs(context).getInt(KEY_AV1_ENC_MODE, 10)
+
+    fun setAv1EncMode(context: Context, mode: Int) =
+        prefs(context).edit { putInt(KEY_AV1_ENC_MODE, mode.coerceIn(0, 10)) }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

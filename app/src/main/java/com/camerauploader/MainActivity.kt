@@ -19,12 +19,6 @@ import androidx.core.content.ContextCompat
 
 /**
  * Launcher activity — shows a settings dialog and then disappears.
- *
- * Settings:
- *   - Upload URL (required)
- *   - Capture interval in seconds (default 300)
- *   - Image resolution (spinner populated from the device's supported sizes)
- *   - Optional Basic Auth username / password
  */
 class MainActivity : AppCompatActivity() {
 
@@ -37,6 +31,8 @@ class MainActivity : AppCompatActivity() {
             val perms = mutableListOf(Manifest.permission.CAMERA)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                 perms += Manifest.permission.POST_NOTIFICATIONS
+            if (SettingsManager.isDaylightOnly(this))
+                perms += Manifest.permission.ACCESS_COARSE_LOCATION
             return perms.toTypedArray()
         }
 
@@ -53,19 +49,12 @@ class MainActivity : AppCompatActivity() {
 
     // ── Resolution loading ────────────────────────────────────────────────────
 
-    /**
-     * Queries supported resolutions on a background thread, then shows the
-     * settings dialog on the main thread once the list is ready.
-     */
     private fun loadResolutionsAndShowDialog() {
-        // Show a brief loading indicator while we query the camera.
         val progress = AlertDialog.Builder(this)
             .setMessage("Loading camera resolutions…")
             .setCancelable(false)
             .create()
 
-        // Only show spinner if camera permission is already granted; on first
-        // run we haven't asked yet, so skip the camera query entirely.
         val cameraGranted = ContextCompat.checkSelfPermission(
             this, Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
@@ -80,8 +69,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }.start()
         } else {
-            // No permission yet — show dialog without resolution list; user can
-            // change resolution after granting permission on the next open.
             showSettingsDialog(emptyList())
         }
     }
@@ -93,6 +80,13 @@ class MainActivity : AppCompatActivity() {
         val isFirstRun = !s.isConfigured(this)
         val pad = dpToPx(20)
         val halfPad = dpToPx(8)
+
+        // ── Recording enabled ──
+        val recordingEnabledCheck = CheckBox(this).apply {
+            text = "Recording enabled"
+            isChecked = s.isRecordingEnabled(this@MainActivity)
+            setPadding(0, dpToPx(4), 0, dpToPx(8))
+        }
 
         // ── Upload URL ──
         val urlLabel = label("Upload URL *")
@@ -114,7 +108,6 @@ class MainActivity : AppCompatActivity() {
         val resLabel = label("Image resolution")
         val savedSize = s.getResolution(this)
 
-        // Build spinner entries: prepend "Device default (highest)" option.
         data class ResEntry(val size: Size?, val label: String)
 
         val resEntries = mutableListOf(ResEntry(null, "Device default (highest)"))
@@ -127,8 +120,6 @@ class MainActivity : AppCompatActivity() {
                 resEntries.map { it.label }
             ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
             setAdapter(adapter)
-
-            // Pre-select the saved resolution, falling back to "Device default".
             val savedIndex = if (savedSize == null) 0
                 else resEntries.indexOfFirst { it.size == savedSize }.takeIf { it >= 0 } ?: 0
             setSelection(savedIndex)
@@ -163,6 +154,68 @@ class MainActivity : AppCompatActivity() {
         val modeNote = TextView(this).apply {
             text = "AV1 encodes each YUV frame and sends the OBU chunks as the " +
                 "\"image\" field of a multipart POST, one POST per capture."
+            textSize = 11f
+            setTextColor(0xFF888888.toInt())
+            setPadding(0, dpToPx(2), 0, 0)
+        }
+
+        // ── Day-by-day recording ──
+        val dailyDirHeader = label("Day-by-day recording")
+        val dailyDirCheck = CheckBox(this).apply {
+            text = "Group captures by day (date-prefixed upload path)"
+            isChecked = s.isDailyDirMode(this@MainActivity)
+        }
+        val mkcolCheck = CheckBox(this).apply {
+            text = "    Create daily directory on server (WebDAV MKCOL)"
+            isChecked = s.isDailyDirMkcol(this@MainActivity)
+            isEnabled = dailyDirCheck.isChecked
+        }
+        dailyDirCheck.setOnCheckedChangeListener { _, checked -> mkcolCheck.isEnabled = checked }
+
+        // ── Daylight hours ──
+        val daylightHeader = label("Recording window")
+        val daylightCheck = CheckBox(this).apply {
+            text = "Daylight hours only (sunrise–sunset)"
+            isChecked = s.isDaylightOnly(this@MainActivity)
+        }
+        val daylightOffsetLabel = label("Daylight offset (minutes)")
+        val daylightOffsetInput = editText(
+            value     = s.getDaylightOffsetMinutes(this).toString(),
+            hint      = "0",
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
+        )
+        val daylightNote = TextView(this).apply {
+            text = "Positive offset widens the recording window (start earlier, stop later). " +
+                   "Requires location permission (ACCESS_COARSE_LOCATION)."
+            textSize = 11f
+            setTextColor(0xFF888888.toInt())
+            setPadding(0, dpToPx(2), 0, 0)
+        }
+        val locationInfo = TextView(this).apply {
+            val lat = s.getLocationLat(this@MainActivity)
+            text = if (lat.isNaN()) "Location: not yet acquired"
+                   else "Location: %.4f, %.4f".format(lat, s.getLocationLon(this@MainActivity))
+            textSize = 11f
+            setTextColor(0xFF888888.toInt())
+            setPadding(0, dpToPx(2), 0, 0)
+        }
+
+        // ── AV1 encoding parameters ──
+        val av1Header = label("AV1 encoding parameters")
+        val av1CrfLabel = label("CRF (0–63, lower = better quality; default 37)")
+        val av1CrfInput = editText(
+            value     = s.getAv1Crf(this).toString(),
+            hint      = "37",
+            inputType = InputType.TYPE_CLASS_NUMBER
+        )
+        val av1ModeLabel = label("Encoding mode (0–10, lower = slower/better; default 10)")
+        val av1ModeInput = editText(
+            value     = s.getAv1EncMode(this).toString(),
+            hint      = "10",
+            inputType = InputType.TYPE_CLASS_NUMBER
+        )
+        val av1Note = TextView(this).apply {
+            text = "Changes take effect on next service restart."
             textSize = 11f
             setTextColor(0xFF888888.toInt())
             setPadding(0, dpToPx(2), 0, 0)
@@ -210,6 +263,7 @@ class MainActivity : AppCompatActivity() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, halfPad, pad, halfPad)
+            addView(recordingEnabledCheck)
             addView(urlLabel)
             addView(urlInput)
             addView(intervalLabel)
@@ -220,6 +274,21 @@ class MainActivity : AppCompatActivity() {
             addView(modeLabel)
             addView(modeSpinner)
             addView(modeNote)
+            addView(dailyDirHeader)
+            addView(dailyDirCheck)
+            addView(mkcolCheck)
+            addView(daylightHeader)
+            addView(daylightCheck)
+            addView(daylightOffsetLabel)
+            addView(daylightOffsetInput)
+            addView(daylightNote)
+            addView(locationInfo)
+            addView(av1Header)
+            addView(av1CrfLabel)
+            addView(av1CrfInput)
+            addView(av1ModeLabel)
+            addView(av1ModeInput)
+            addView(av1Note)
             addView(authHeader)
             addView(authSubtitle)
             addView(userLabel)
@@ -255,6 +324,16 @@ class MainActivity : AppCompatActivity() {
                     userInput.text.toString().trim(),
                     passInput.text.toString()
                 )
+                s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
+                s.setDailyDirMode(this, dailyDirCheck.isChecked)
+                s.setDailyDirMkcol(this, mkcolCheck.isChecked)
+                s.setDaylightOnly(this, daylightCheck.isChecked)
+                val offset = daylightOffsetInput.text.toString().trim().toIntOrNull() ?: 0
+                s.setDaylightOffsetMinutes(this, offset)
+                val crf = av1CrfInput.text.toString().trim().toIntOrNull() ?: 37
+                s.setAv1Crf(this, crf)
+                val encMode = av1ModeInput.text.toString().trim().toIntOrNull() ?: 10
+                s.setAv1EncMode(this, encMode)
 
                 proceedAfterSettingsSaved()
             }
@@ -274,6 +353,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun proceedAfterSettingsSaved() {
+        if (!SettingsManager.isRecordingEnabled(this)) {
+            AlarmScheduler.cancel(this)
+            toast("Recording disabled")
+            finish()
+            return
+        }
         if (allPermissionsGranted()) {
             restartUploaderService()
             toast("Uploader running ✓")
@@ -308,8 +393,6 @@ class MainActivity : AppCompatActivity() {
 
     @OptIn(ExperimentalCamera2Interop::class)
     private fun restartUploaderService() {
-        // Cancel any existing alarm, then arm a fresh one.
-        // Also kick off an immediate first capture by starting the service directly.
         AlarmScheduler.scheduleNext(this)
         val intent = Intent(this, CameraUploaderService::class.java).apply {
             action = CameraUploaderWorker.ACTION_CAPTURE

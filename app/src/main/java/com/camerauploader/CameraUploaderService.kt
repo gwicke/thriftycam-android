@@ -1,10 +1,12 @@
 package com.camerauploader
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.IntentFilter
+import android.location.LocationManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -25,6 +27,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.time.LocalDate
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -61,6 +64,10 @@ class CameraUploaderService : Service(), LifecycleOwner {
     @Volatile private var av1Encoder: Av1Encoder? = null
     private var isFirstAv1Frame = true
 
+    // ── Day boundary tracking ─────────────────────────────────────────────────
+    @Volatile private var lastCaptureDate: String = ""  // ISO date of last capture
+    @Volatile private var lastMkcolDate: String = ""    // ISO date of last successful MKCOL
+
     // ── LifecycleOwner for CameraX ────────────────────────────────────────────
     private val lifecycleRegistry = LifecycleRegistry(this)
     override val lifecycle: Lifecycle
@@ -80,6 +87,7 @@ class CameraUploaderService : Service(), LifecycleOwner {
         setupCamera()
         workerThread = HandlerThread("CameraWorker").also { it.start() }
         workerHandler = Handler(workerThread.looper)
+        if (SettingsManager.isDaylightOnly(this)) acquireLocationOnce()
     }
 
     override fun onDestroy() {
@@ -115,17 +123,60 @@ class CameraUploaderService : Service(), LifecycleOwner {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Location (one-time acquisition for daylight mode)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @SuppressLint("MissingPermission")
+    private fun acquireLocationOnce() {
+        if (SettingsManager.hasLocation(this)) return
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        val providers = listOf(
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.GPS_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER,
+        )
+        val loc = providers.firstNotNullOfOrNull { p ->
+            runCatching { lm.getLastKnownLocation(p) }.getOrNull()
+        }
+        if (loc != null) {
+            SettingsManager.setLocation(this, loc.latitude.toFloat(), loc.longitude.toFloat())
+            Log.i(TAG, "Location cached: ${loc.latitude}, ${loc.longitude}")
+        } else {
+            Log.w(TAG, "Location not yet available — will retry on next start")
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // AV1 encoder pipeline
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
      * Submit a captured I420 frame to the persistent AV1 encoder.
-     * Opens the encoder lazily on the first call and starts the packet reader
-     * loop.
+     * Opens the encoder lazily on the first call, and resets it at day boundaries
+     * when day-by-day mode is active so each day starts with a fresh keyframe.
      */
     fun submitAv1Frame(frame: Av1Streamer.Frame) {
+        val today = LocalDate.now().toString()
+
+        // Day boundary: detach current encoder so the reader loop drains and closes it,
+        // then a fresh encoder (with a keyframe) is opened below.
+        if (SettingsManager.isDailyDirMode(this)
+            && lastCaptureDate.isNotEmpty()
+            && lastCaptureDate != today
+        ) {
+            val old = av1Encoder
+            av1Encoder = null      // reader loop will detect av1Encoder !== old and skip the field clear
+            isFirstAv1Frame = true
+            old?.sendEos()         // drains remaining packets, then reader loop closes 'old' via its local ref
+        }
+        lastCaptureDate = today
+
         if (av1Encoder == null) {
-            val enc = Av1Encoder.open(frame.width, frame.height)
+            val enc = Av1Encoder.open(
+                frame.width, frame.height,
+                crf     = SettingsManager.getAv1Crf(this),
+                encMode = SettingsManager.getAv1EncMode(this),
+            )
             if (enc == null) {
                 Log.e(TAG, "Failed to open AV1 encoder")
                 updateNotification("AV1 encoder init failed")
@@ -147,7 +198,10 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     /**
      * Persistent blocking loop on [uploadExecutor]: drains OBU packets from
-     * the encoder and POSTs each one individually.  Exits on EOS or error.
+     * the encoder and POSTs each one individually. Exits on EOS or error.
+     * Uses the local [enc] reference rather than [av1Encoder] so that a
+     * day-boundary reset (which nulls [av1Encoder] and calls sendEos) can
+     * proceed safely without a race on the close call.
      */
     private fun startAv1ReaderLoop(enc: Av1Encoder) {
         uploadExecutor.execute {
@@ -160,9 +214,8 @@ class CameraUploaderService : Service(), LifecycleOwner {
                             if (pkt.isKey) "key.av1" else "av1")
                     }
                     else -> {
-                        // Reset pipeline
-                        av1Encoder?.close()
-                        av1Encoder = null
+                        enc.close()  // close via local ref (safe even after field was nulled)
+                        if (av1Encoder === enc) av1Encoder = null
                         break
                     }
                 }
@@ -180,16 +233,26 @@ class CameraUploaderService : Service(), LifecycleOwner {
     }
 
     /**
-     * Shared multipart POST helper.  Must be called from [uploadExecutor].
-     * Sends [bytes] as the "image" field with the given [mimeType] and
-     * filename [ext].
+     * Shared multipart POST helper. Must be called from [uploadExecutor].
+     * When day-by-day mode is enabled, appends the current ISO date to the
+     * upload URL (e.g. https://example.com/upload/2026-05-19) and optionally
+     * issues a WebDAV MKCOL to create that directory first.
      */
     private fun postImage(bytes: ByteArray, mimeType: String, ext: String) {
-        val uploadUrl = SettingsManager.getUploadUrl(this)
-        if (uploadUrl.isBlank()) {
+        val baseUrl = SettingsManager.getUploadUrl(this)
+        if (baseUrl.isBlank()) {
             updateNotification("No URL — tap icon to configure.")
             return
         }
+
+        val uploadUrl = if (SettingsManager.isDailyDirMode(this)) {
+            val date = LocalDate.now().toString()  // "2026-05-19"
+            if (SettingsManager.isDailyDirMkcol(this)) ensureDayDirectory(baseUrl, date)
+            "${baseUrl.trimEnd('/')}/$date"
+        } else {
+            baseUrl
+        }
+
         updateNotification("Uploading ${bytes.size / 1024} KB…")
         val timestamp = System.currentTimeMillis()
         val body = MultipartBody.Builder()
@@ -218,6 +281,33 @@ class CameraUploaderService : Service(), LifecycleOwner {
         } catch (e: IOException) {
             Log.e(TAG, "postImage IOException", e)
             updateNotification("Upload error")
+        }
+    }
+
+    /**
+     * Issues a WebDAV MKCOL to create the day's directory on the server.
+     * Skips the request if we already successfully created [date]'s directory
+     * this session. Treats 405 (already exists) as success.
+     */
+    private fun ensureDayDirectory(baseUrl: String, date: String) {
+        if (lastMkcolDate == date) return
+        val dirUrl = "${baseUrl.trimEnd('/')}/$date/"
+        val req = Request.Builder()
+            .url(dirUrl)
+            .method("MKCOL", null)
+            .also { SettingsManager.getBasicAuthHeader(this)?.let { h -> it.header("Authorization", h) } }
+            .build()
+        try {
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful || resp.code == 405) {
+                    lastMkcolDate = date
+                    Log.d(TAG, "Day directory ready: $date (HTTP ${resp.code})")
+                } else {
+                    Log.w(TAG, "MKCOL $dirUrl → HTTP ${resp.code}")
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "MKCOL failed", e)
         }
     }
 
