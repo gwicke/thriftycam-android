@@ -66,8 +66,8 @@ class CameraUploaderService : Service(), LifecycleOwner {
     private var isFirstAv1Frame = true
 
     // ── Day boundary tracking ─────────────────────────────────────────────────
-    @Volatile private var lastCaptureDate: String = ""  // ISO date of last capture
-    @Volatile private var lastMkcolDate: String = ""    // ISO date of last successful MKCOL
+    private var lastCaptureDate: String = ""         // written only in postWorker (main thread)
+    @Volatile private var lastMkcolDate: String = "" // written from main + uploadExecutor threads
 
     // ── LifecycleOwner for CameraX ────────────────────────────────────────────
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -106,36 +106,36 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     @OptIn(ExperimentalCamera2Interop::class)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!isWithinRecordingWindow()) {
-            Log.d(TAG, "Outside recording window — skipping capture")
-            stopSelf()
-            return START_NOT_STICKY
-        }
         postWorker()
         return START_STICKY
-    }
-
-    private fun isWithinRecordingWindow(): Boolean {
-        if (!SettingsManager.isDayByDayMode(this)) return true
-        if (!SettingsManager.isDaylightOnly(this)) return true
-        if (!SettingsManager.hasLocation(this)) return true
-        val lat = SettingsManager.getLocationLat(this).toDouble()
-        val lon = SettingsManager.getLocationLon(this).toDouble()
-        val offsetMs = SettingsManager.getDaylightOffsetMinutes(this) * 60_000L
-        val today = LocalDate.now(ZoneId.systemDefault())
-        val (rise, set) = SunriseSunset.compute(today, lat, lon) ?: return true  // polar day
-        val now = System.currentTimeMillis()
-        return now >= (rise - offsetMs) && now < (set + offsetMs)
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
     private fun postWorker() {
         captureTime = System.currentTimeMillis()
+
+        if (SettingsManager.isDayByDayMode(this)) {
+            val today = LocalDate.now(ZoneId.systemDefault()).toString()
+            if (lastCaptureDate.isNotEmpty() && lastCaptureDate != today) {
+                resetDayState()
+            }
+            lastCaptureDate = today
+        }
+
         CameraUploaderWorker(
             cameraProvider!!, lifecycleRegistry, this,
             this,
             this,
         ) { s -> this.updateNotification(s) }.run()
+    }
+
+    /** Called at each day boundary: resets directory and encoder state. */
+    private fun resetDayState() {
+        lastMkcolDate = ""
+        val old = av1Encoder
+        av1Encoder = null
+        isFirstAv1Frame = true
+        old?.sendEos()  // reader loop drains remaining packets then closes via its local ref
     }
 
     private fun setupCamera() {
@@ -170,27 +170,8 @@ class CameraUploaderService : Service(), LifecycleOwner {
     // AV1 encoder pipeline
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Submit a captured I420 frame to the persistent AV1 encoder.
-     * Opens the encoder lazily on the first call, and resets it at day boundaries
-     * when day-by-day mode is active so each day starts with a fresh keyframe.
-     */
+    /** Submit a captured I420 frame to the persistent AV1 encoder, opening it lazily. */
     fun submitAv1Frame(frame: Av1Streamer.Frame) {
-        val today = LocalDate.now(ZoneId.systemDefault()).toString()
-
-        // Day boundary: detach current encoder so the reader loop drains and closes it,
-        // then a fresh encoder (with a keyframe) is opened below.
-        if (SettingsManager.isDayByDayMode(this)
-            && lastCaptureDate.isNotEmpty()
-            && lastCaptureDate != today
-        ) {
-            val old = av1Encoder
-            av1Encoder = null      // reader loop will detect av1Encoder !== old and skip the field clear
-            isFirstAv1Frame = true
-            old?.sendEos()         // drains remaining packets, then reader loop closes 'old' via its local ref
-        }
-        lastCaptureDate = today
-
         if (av1Encoder == null) {
             val enc = Av1Encoder.open(
                 frame.width, frame.height,
