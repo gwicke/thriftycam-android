@@ -22,7 +22,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -198,11 +197,9 @@ class CameraUploaderService : Service(), LifecycleOwner {
     }
 
     /**
-     * Persistent blocking loop on [uploadExecutor]: drains OBU packets from
-     * the encoder and POSTs each one individually. Exits on EOS or error.
-     * Uses the local [enc] reference rather than [av1Encoder] so that a
-     * day-boundary reset (which nulls [av1Encoder] and calls sendEos) can
-     * proceed safely without a race on the close call.
+     * Persistent blocking loop on [uploadExecutor]: drains OBU packets from the encoder
+     * and PUTs each one individually. Uses the local [enc] reference rather than [av1Encoder]
+     * so a day-boundary reset (which nulls [av1Encoder] and calls sendEos) is race-free.
      */
     private fun startAv1ReaderLoop(enc: Av1Encoder) {
         uploadExecutor.execute {
@@ -211,8 +208,7 @@ class CameraUploaderService : Service(), LifecycleOwner {
                 enc.getPacket(pkt)
                 when (pkt.status) {
                     Av1Encoder.Status.OK -> pkt.payload?.let {
-                        postImage(it, "video/AV1",
-                            if (pkt.isKey) "key.av1" else "av1")
+                        putImage(it, "video/AV1", if (pkt.isKey) "key.av1" else "av1")
                     }
                     else -> {
                         enc.close()  // close via local ref (safe even after field was nulled)
@@ -228,59 +224,60 @@ class CameraUploaderService : Service(), LifecycleOwner {
     // Upload
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Post a JPEG to [uploadExecutor]. */
+    /** PUT a JPEG to [uploadExecutor]. */
     fun uploadJpeg(jpeg: ByteArray) {
-        uploadExecutor.execute { postImage(jpeg, "image/jpeg", "jpg") }
+        uploadExecutor.execute { putImage(jpeg, "image/jpeg", "jpg") }
     }
 
     /**
-     * Shared multipart POST helper. Must be called from [uploadExecutor].
-     * When day-by-day mode is enabled, appends the current ISO date to the
-     * upload URL (e.g. https://example.com/upload/2026-05-19) and optionally
-     * issues a WebDAV MKCOL to create that directory first.
+     * PUT [bytes] to [baseUrl]/{date}/{timestamp}.[ext] (date segment only when daily-dir
+     * mode is active). Sensor metadata travels in the [x-sensor-data] header as JSON so
+     * the URL and body stay clean.
      */
-    private fun postImage(bytes: ByteArray, mimeType: String, ext: String) {
+    private fun putImage(bytes: ByteArray, mimeType: String, ext: String) {
         val baseUrl = SettingsManager.getUploadUrl(this)
         if (baseUrl.isBlank()) {
             updateNotification("No URL — tap icon to configure.")
             return
         }
 
-        val uploadUrl = if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDailyDirMode(this)) {
+        val timestamp = System.currentTimeMillis()
+        val duration  = timestamp - captureTime
+
+        val dirUrl = if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDailyDirMode(this)) {
             val date = LocalDate.now(ZoneId.systemDefault()).toString()  // "2026-05-19"
             ensureDayDirectory(baseUrl, date)
             "${baseUrl.trimEnd('/')}/$date"
         } else {
-            baseUrl
+            baseUrl.trimEnd('/')
+        }
+
+        val bat = getBatteryLevel()
+        val sensorData = buildString {
+            append("{\"duration\":$duration")
+            if (bat != null) append(",\"batlevel\":${"%.1f".format(bat)}")
+            append("}")
         }
 
         updateNotification("Uploading ${bytes.size / 1024} KB…")
-        val timestamp = System.currentTimeMillis()
-        val body = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart(
-                "image", "$timestamp.$ext",
-                bytes.toRequestBody(mimeType.toMediaType())
-            )
-            .addFormDataPart("timestamp", (timestamp - captureTime).toString())
-            .addFormDataPart("batlevel", getBatteryLevel().toString())
+        val req = Request.Builder()
+            .url("$dirUrl/$timestamp.$ext")
+            .put(bytes.toRequestBody(mimeType.toMediaType()))
+            .header("x-sensor-data", sensorData)
+            .also { SettingsManager.getBasicAuthHeader(this)?.let { h -> it.header("Authorization", h) } }
             .build()
-        val req = Request.Builder().url(uploadUrl).post(body)
-        SettingsManager.getBasicAuthHeader(this)?.let { req.header("Authorization", it) }
         try {
-            httpClient.newCall(req.build()).execute().use { resp ->
+            httpClient.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) {
                     Log.i(TAG, "Upload OK: ${resp.code}")
-                    updateNotification(
-                        "Last upload: ${DateFormat.format("HH:mm:ss", timestamp)} ✓"
-                    )
+                    updateNotification("Last upload: ${DateFormat.format("HH:mm:ss", timestamp)} ✓")
                 } else {
                     Log.w(TAG, "Upload failed: HTTP ${resp.code}")
                     updateNotification("Upload failed (HTTP ${resp.code})")
                 }
             }
         } catch (e: IOException) {
-            Log.e(TAG, "postImage IOException", e)
+            Log.e(TAG, "putImage IOException", e)
             updateNotification("Upload error")
         }
     }
