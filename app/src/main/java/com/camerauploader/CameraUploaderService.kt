@@ -28,6 +28,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.time.LocalDate
+import java.time.ZoneId
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -87,7 +88,8 @@ class CameraUploaderService : Service(), LifecycleOwner {
         setupCamera()
         workerThread = HandlerThread("CameraWorker").also { it.start() }
         workerHandler = Handler(workerThread.looper)
-        if (SettingsManager.isDaylightOnly(this)) acquireLocationOnce()
+        if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDaylightOnly(this))
+            acquireLocationOnce()
     }
 
     override fun onDestroy() {
@@ -104,8 +106,26 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     @OptIn(ExperimentalCamera2Interop::class)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!isWithinRecordingWindow()) {
+            Log.d(TAG, "Outside recording window — skipping capture")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         postWorker()
         return START_STICKY
+    }
+
+    private fun isWithinRecordingWindow(): Boolean {
+        if (!SettingsManager.isDayByDayMode(this)) return true
+        if (!SettingsManager.isDaylightOnly(this)) return true
+        if (!SettingsManager.hasLocation(this)) return true
+        val lat = SettingsManager.getLocationLat(this).toDouble()
+        val lon = SettingsManager.getLocationLon(this).toDouble()
+        val offsetMs = SettingsManager.getDaylightOffsetMinutes(this) * 60_000L
+        val today = LocalDate.now(ZoneId.systemDefault())
+        val (rise, set) = SunriseSunset.compute(today, lat, lon) ?: return true  // polar day
+        val now = System.currentTimeMillis()
+        return now >= (rise - offsetMs) && now < (set + offsetMs)
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
@@ -156,11 +176,11 @@ class CameraUploaderService : Service(), LifecycleOwner {
      * when day-by-day mode is active so each day starts with a fresh keyframe.
      */
     fun submitAv1Frame(frame: Av1Streamer.Frame) {
-        val today = LocalDate.now().toString()
+        val today = LocalDate.now(ZoneId.systemDefault()).toString()
 
         // Day boundary: detach current encoder so the reader loop drains and closes it,
         // then a fresh encoder (with a keyframe) is opened below.
-        if (SettingsManager.isDailyDirMode(this)
+        if (SettingsManager.isDayByDayMode(this)
             && lastCaptureDate.isNotEmpty()
             && lastCaptureDate != today
         ) {
@@ -245,9 +265,9 @@ class CameraUploaderService : Service(), LifecycleOwner {
             return
         }
 
-        val uploadUrl = if (SettingsManager.isDailyDirMode(this)) {
-            val date = LocalDate.now().toString()  // "2026-05-19"
-            if (SettingsManager.isDailyDirMkcol(this)) ensureDayDirectory(baseUrl, date)
+        val uploadUrl = if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDailyDirMode(this)) {
+            val date = LocalDate.now(ZoneId.systemDefault()).toString()  // "2026-05-19"
+            ensureDayDirectory(baseUrl, date)
             "${baseUrl.trimEnd('/')}/$date"
         } else {
             baseUrl

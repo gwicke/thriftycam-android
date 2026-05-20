@@ -17,9 +17,6 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
-/**
- * Launcher activity — shows a settings dialog and then disappears.
- */
 class MainActivity : AppCompatActivity() {
 
     companion object {
@@ -31,7 +28,7 @@ class MainActivity : AppCompatActivity() {
             val perms = mutableListOf(Manifest.permission.CAMERA)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                 perms += Manifest.permission.POST_NOTIFICATIONS
-            if (SettingsManager.isDaylightOnly(this))
+            if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDaylightOnly(this))
                 perms += Manifest.permission.ACCESS_COARSE_LOCATION
             return perms.toTypedArray()
         }
@@ -159,48 +156,70 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dpToPx(2), 0, 0)
         }
 
-        // ── Day-by-day recording ──
-        val dailyDirHeader = label("Day-by-day recording")
-        val dailyDirCheck = CheckBox(this).apply {
-            text = "Group captures by day (date-prefixed upload path)"
-            isChecked = s.isDailyDirMode(this@MainActivity)
+        // ── Day-by-day recording ──────────────────────────────────────────────
+        // Top-level: resets the AV1 encoder at each local-timezone day boundary.
+        val dayByDayHeader = label("Day-by-day recording")
+        val dayByDayCheck = CheckBox(this).apply {
+            text = "Enable day-by-day mode"
+            isChecked = s.isDayByDayMode(this@MainActivity)
         }
-        val mkcolCheck = CheckBox(this).apply {
-            text = "    Create daily directory on server (WebDAV MKCOL)"
-            isChecked = s.isDailyDirMkcol(this@MainActivity)
-            isEnabled = dailyDirCheck.isChecked
-        }
-        dailyDirCheck.setOnCheckedChangeListener { _, checked -> mkcolCheck.isEnabled = checked }
 
-        // ── Daylight hours ──
-        val daylightHeader = label("Recording window")
+        // Sub-option: create per-day directories on the server via WebDAV MKCOL.
+        val indentPx = dpToPx(24)
+        val dailyDirCheck = CheckBox(this).apply {
+            text = "Create daily directory on server (WebDAV MKCOL, date-prefixed path)"
+            isChecked = s.isDailyDirMode(this@MainActivity)
+            isEnabled = dayByDayCheck.isChecked
+            setPadding(indentPx, 0, 0, 0)
+        }
+
+        // Sub-option: limit recording to the daylight window.
         val daylightCheck = CheckBox(this).apply {
             text = "Daylight hours only (sunrise–sunset)"
             isChecked = s.isDaylightOnly(this@MainActivity)
+            isEnabled = dayByDayCheck.isChecked
+            setPadding(indentPx, 0, 0, 0)
         }
-        val daylightOffsetLabel = label("Daylight offset (minutes)")
+        val daylightOffsetLabel = label("    Daylight offset (minutes)").apply {
+            isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked
+        }
         val daylightOffsetInput = editText(
             value     = s.getDaylightOffsetMinutes(this).toString(),
             hint      = "0",
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
-        )
+        ).apply {
+            isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked
+        }
         val daylightNote = TextView(this).apply {
-            text = "Positive offset widens the recording window (start earlier, stop later). " +
-                   "Requires location permission (ACCESS_COARSE_LOCATION)."
+            text = "Positive = wider window (start before sunrise, stop after sunset). " +
+                   "Requires ACCESS_COARSE_LOCATION."
             textSize = 11f
             setTextColor(0xFF888888.toInt())
-            setPadding(0, dpToPx(2), 0, 0)
+            setPadding(indentPx, dpToPx(2), 0, 0)
         }
         val locationInfo = TextView(this).apply {
             val lat = s.getLocationLat(this@MainActivity)
-            text = if (lat.isNaN()) "Location: not yet acquired"
-                   else "Location: %.4f, %.4f".format(lat, s.getLocationLon(this@MainActivity))
+            text = if (lat.isNaN()) "    Location: not yet acquired"
+                   else "    Location: %.4f, %.4f".format(lat, s.getLocationLon(this@MainActivity))
             textSize = 11f
             setTextColor(0xFF888888.toInt())
             setPadding(0, dpToPx(2), 0, 0)
         }
 
-        // ── AV1 encoding parameters ──
+        fun updateDaylightSubItems() {
+            val on = dayByDayCheck.isChecked && daylightCheck.isChecked
+            daylightOffsetLabel.isEnabled = on
+            daylightOffsetInput.isEnabled = on
+        }
+
+        dayByDayCheck.setOnCheckedChangeListener { _, checked ->
+            dailyDirCheck.isEnabled = checked
+            daylightCheck.isEnabled = checked
+            updateDaylightSubItems()
+        }
+        daylightCheck.setOnCheckedChangeListener { _, _ -> updateDaylightSubItems() }
+
+        // ── AV1 encoding parameters ───────────────────────────────────────────
         val av1Header = label("AV1 encoding parameters")
         val av1CrfLabel = label("CRF (0–63, lower = better quality; default 37)")
         val av1CrfInput = editText(
@@ -274,10 +293,9 @@ class MainActivity : AppCompatActivity() {
             addView(modeLabel)
             addView(modeSpinner)
             addView(modeNote)
-            addView(dailyDirHeader)
+            addView(dayByDayHeader)
+            addView(dayByDayCheck)
             addView(dailyDirCheck)
-            addView(mkcolCheck)
-            addView(daylightHeader)
             addView(daylightCheck)
             addView(daylightOffsetLabel)
             addView(daylightOffsetInput)
@@ -319,14 +337,9 @@ class MainActivity : AppCompatActivity() {
                 s.setIntervalSeconds(this, intervalSecs)
                 s.setResolution(this, resEntries[resSpinner.selectedItemPosition].size)
                 s.setUploadMode(this, modeEntries[modeSpinner.selectedItemPosition].first)
-                s.setAuthCredentials(
-                    this,
-                    userInput.text.toString().trim(),
-                    passInput.text.toString()
-                )
                 s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
+                s.setDayByDayMode(this, dayByDayCheck.isChecked)
                 s.setDailyDirMode(this, dailyDirCheck.isChecked)
-                s.setDailyDirMkcol(this, mkcolCheck.isChecked)
                 s.setDaylightOnly(this, daylightCheck.isChecked)
                 val offset = daylightOffsetInput.text.toString().trim().toIntOrNull() ?: 0
                 s.setDaylightOffsetMinutes(this, offset)
@@ -334,6 +347,11 @@ class MainActivity : AppCompatActivity() {
                 s.setAv1Crf(this, crf)
                 val encMode = av1ModeInput.text.toString().trim().toIntOrNull() ?: 10
                 s.setAv1EncMode(this, encMode)
+                s.setAuthCredentials(
+                    this,
+                    userInput.text.toString().trim(),
+                    passInput.text.toString()
+                )
 
                 proceedAfterSettingsSaved()
             }

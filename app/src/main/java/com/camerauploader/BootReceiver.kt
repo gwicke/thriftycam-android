@@ -30,6 +30,10 @@ class BootReceiver : BroadcastReceiver() {
             Log.i(TAG, "App not configured yet — skipping alarm arm")
             return
         }
+        if (!SettingsManager.isRecordingEnabled(context)) {
+            Log.i(TAG, "Recording disabled — skipping boot arm")
+            return
+        }
 
         Log.i(TAG, "Boot detected — starting capture service")
         val activityIntent = Intent(context, CameraBridgeActivity::class.java).apply {

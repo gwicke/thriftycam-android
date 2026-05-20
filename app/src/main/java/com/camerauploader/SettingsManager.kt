@@ -5,32 +5,25 @@ import android.util.Base64
 import android.util.Size
 import androidx.core.content.edit
 
-/**
- * Thin wrapper around SharedPreferences for app settings.
- * All components read settings from here — single source of truth.
- */
 object SettingsManager {
 
     private const val PREFS_NAME = "camera_uploader_prefs"
 
-    private const val KEY_UPLOAD_URL    = "upload_url"
-    private const val KEY_INTERVAL_SECS = "interval_seconds"
-    private const val KEY_AUTH_USERNAME  = "auth_username"
-    private const val KEY_RESOLUTION     = "resolution"
-    private const val KEY_AUTH_PASSWORD = "auth_password"
-    private const val KEY_UPLOAD_MODE   = "upload_mode"
-
-    private const val KEY_RECORDING_ENABLED     = "recording_enabled"
-    private const val KEY_DAILY_DIR_MODE        = "daily_dir_mode"
-    private const val KEY_DAILY_DIR_MKCOL       = "daily_dir_mkcol"
-    private const val KEY_DAYLIGHT_ONLY         = "daylight_only"
-    private const val KEY_DAYLIGHT_OFFSET_MIN   = "daylight_offset_minutes"
-    private const val KEY_DAYLIGHT_WINDOW_START = "daylight_window_start_ms"
-    private const val KEY_DAYLIGHT_WINDOW_END   = "daylight_window_end_ms"
-    private const val KEY_AV1_CRF              = "av1_crf"
-    private const val KEY_AV1_ENC_MODE         = "av1_enc_mode"
-    private const val KEY_LOCATION_LAT         = "location_lat"
-    private const val KEY_LOCATION_LON         = "location_lon"
+    private const val KEY_UPLOAD_URL          = "upload_url"
+    private const val KEY_INTERVAL_SECS       = "interval_seconds"
+    private const val KEY_AUTH_USERNAME       = "auth_username"
+    private const val KEY_RESOLUTION          = "resolution"
+    private const val KEY_AUTH_PASSWORD       = "auth_password"
+    private const val KEY_UPLOAD_MODE         = "upload_mode"
+    private const val KEY_RECORDING_ENABLED   = "recording_enabled"
+    private const val KEY_DAY_BY_DAY_MODE     = "day_by_day_mode"
+    private const val KEY_DAILY_DIR_MODE      = "daily_dir_mode"   // sub: date-prefix + MKCOL
+    private const val KEY_DAYLIGHT_ONLY       = "daylight_only"    // sub: daylight window
+    private const val KEY_DAYLIGHT_OFFSET_MIN = "daylight_offset_minutes"
+    private const val KEY_AV1_CRF             = "av1_crf"
+    private const val KEY_AV1_ENC_MODE        = "av1_enc_mode"
+    private const val KEY_LOCATION_LAT        = "location_lat"
+    private const val KEY_LOCATION_LON        = "location_lon"
 
     const val DEFAULT_INTERVAL_SECONDS = 300
 
@@ -53,8 +46,6 @@ object SettingsManager {
     fun setUploadMode(context: Context, mode: UploadMode) =
         prefs(context).edit { putString(KEY_UPLOAD_MODE, mode.name) }
 
-
-
     // ── Upload URL ────────────────────────────────────────────────────────────
 
     fun getUploadUrl(context: Context): String =
@@ -74,12 +65,8 @@ object SettingsManager {
     fun setIntervalSeconds(context: Context, seconds: Int) =
         prefs(context).edit { putInt(KEY_INTERVAL_SECS, seconds.coerceAtLeast(1)) }
 
-    // ── Resolution ───────────────────────────────────────────────────────────────
+    // ── Resolution ────────────────────────────────────────────────────────────
 
-    /**
-     * Saved as "WxH" (e.g. "1920x1080"). Empty string means "let CameraX decide"
-     * which will use the highest available resolution.
-     */
     fun getResolution(context: Context): Size {
         val raw = prefs(context).getString(KEY_RESOLUTION, "") ?: ""
         return if (raw.isBlank()) ResolutionHelper.default() else ResolutionHelper.deserialize(raw)
@@ -104,10 +91,6 @@ object SettingsManager {
             putString(KEY_AUTH_PASSWORD, password)
         }
 
-    /**
-     * Returns a Base64-encoded "Basic ..." header value if a username is set,
-     * or null if Basic Auth is not configured.
-     */
     fun getBasicAuthHeader(context: Context): String? {
         val user = getAuthUsername(context)
         val pass = getAuthPassword(context)
@@ -126,21 +109,26 @@ object SettingsManager {
     fun setRecordingEnabled(context: Context, v: Boolean) =
         prefs(context).edit { putBoolean(KEY_RECORDING_ENABLED, v) }
 
-    // ── Day-by-day recording ──────────────────────────────────────────────────
+    // ── Day-by-day mode ───────────────────────────────────────────────────────
 
+    /** Top-level toggle: resets encoder + directory tracking at each day boundary. */
+    fun isDayByDayMode(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DAY_BY_DAY_MODE, false)
+
+    fun setDayByDayMode(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_DAY_BY_DAY_MODE, v) }
+
+    /**
+     * Sub-option of day-by-day: prefix the upload path with the ISO date and
+     * issue a WebDAV MKCOL to create the directory on first use each day.
+     */
     fun isDailyDirMode(context: Context): Boolean =
         prefs(context).getBoolean(KEY_DAILY_DIR_MODE, false)
 
     fun setDailyDirMode(context: Context, v: Boolean) =
         prefs(context).edit { putBoolean(KEY_DAILY_DIR_MODE, v) }
 
-    fun isDailyDirMkcol(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_DAILY_DIR_MKCOL, false)
-
-    fun setDailyDirMkcol(context: Context, v: Boolean) =
-        prefs(context).edit { putBoolean(KEY_DAILY_DIR_MKCOL, v) }
-
-    // ── Daylight-hours recording ──────────────────────────────────────────────
+    // ── Daylight-hours recording (sub-option of day-by-day) ───────────────────
 
     fun isDaylightOnly(context: Context): Boolean =
         prefs(context).getBoolean(KEY_DAYLIGHT_ONLY, false)
@@ -153,19 +141,6 @@ object SettingsManager {
 
     fun setDaylightOffsetMinutes(context: Context, minutes: Int) =
         prefs(context).edit { putInt(KEY_DAYLIGHT_OFFSET_MIN, minutes) }
-
-    /** Cached sunrise/sunset window as epoch-ms boundaries. Null = not yet computed. */
-    fun getCachedDaylightWindow(context: Context): Pair<Long, Long>? {
-        val start = prefs(context).getLong(KEY_DAYLIGHT_WINDOW_START, -1L)
-        val end   = prefs(context).getLong(KEY_DAYLIGHT_WINDOW_END,   -1L)
-        return if (start >= 0L && end >= 0L) Pair(start, end) else null
-    }
-
-    fun setCachedDaylightWindow(context: Context, windowStart: Long, windowEnd: Long) =
-        prefs(context).edit {
-            putLong(KEY_DAYLIGHT_WINDOW_START, windowStart)
-            putLong(KEY_DAYLIGHT_WINDOW_END,   windowEnd)
-        }
 
     // ── Location (cached once for sunrise/sunset) ─────────────────────────────
 

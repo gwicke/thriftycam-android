@@ -7,86 +7,85 @@ import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import java.time.LocalDate
+import java.time.ZoneId
 
-/**
- * Manages the AlarmManager alarm that triggers captures.
- *
- * Normal mode: ELAPSED_REALTIME_WAKEUP alarm on a rolling interval basis.
- * Daylight-only mode: RTC_WAKEUP alarms tied to the sunrise/sunset window.
- *   The window boundaries are computed once via [SunriseSunset] and cached in
- *   [SettingsManager] as epoch-ms timestamps; they are only recomputed when the
- *   cached window end has passed.
- */
 object AlarmScheduler {
 
     private const val TAG = "AlarmScheduler"
     private const val REQUEST_CODE = 0
 
+    /**
+     * Schedule (or reschedule) the next alarm.
+     *
+     * - Recording disabled: stops the alarm chain entirely.
+     * - Daylight-only mode with known location: RTC_WAKEUP alarm targeting the
+     *   next recording-window boundary; no intermediate alarms outside the window.
+     * - All other cases: ELAPSED_REALTIME_WAKEUP interval alarm (original behaviour).
+     */
     fun scheduleNext(context: Context) {
         if (!SettingsManager.isRecordingEnabled(context)) {
-            Log.d(TAG, "Recording disabled — not scheduling alarm")
+            Log.d(TAG, "Recording disabled — alarm chain stopped")
             return
         }
+
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pending = buildPendingIntent(context)
 
-        if (SettingsManager.isDaylightOnly(context) && SettingsManager.hasLocation(context)) {
+        if (SettingsManager.isDayByDayMode(context) &&
+            SettingsManager.isDaylightOnly(context) &&
+            SettingsManager.hasLocation(context)
+        ) {
             scheduleDaylightAlarm(context, alarmManager, pending)
         } else {
             scheduleIntervalAlarm(context, alarmManager, pending)
         }
     }
 
-    /** Cancel any pending alarm (call when the user disables recording). */
-    fun cancel(context: Context) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmManager.cancel(buildPendingIntent(context))
-        Log.d(TAG, "Alarm cancelled")
-    }
+    // ── Daylight-aware scheduling ─────────────────────────────────────────────
 
-    /**
-     * Resolves the active daylight recording window, using cached boundary timestamps.
-     * Only recomputes when [System.currentTimeMillis] >= cached windowEnd.
-     * Returns null only on polar day/night (sun never rises/sets).
-     */
-    private fun resolveDaylightWindow(context: Context): Pair<Long, Long>? {
+    private fun scheduleDaylightAlarm(
+        context: Context,
+        alarmManager: AlarmManager,
+        pending: PendingIntent,
+    ) {
+        val intervalMs = SettingsManager.getIntervalSeconds(context).toLong()
+            .coerceAtLeast(1L) * 1_000L
+        val offsetMs = SettingsManager.getDaylightOffsetMinutes(context) * 60_000L
         val lat = SettingsManager.getLocationLat(context).toDouble()
         val lon = SettingsManager.getLocationLon(context).toDouble()
-        val offsetMs = SettingsManager.getDaylightOffsetMinutes(context) * 60_000L
         val now = System.currentTimeMillis()
+        val tz  = ZoneId.systemDefault()
 
-        val cached = SettingsManager.getCachedDaylightWindow(context)
-        if (cached != null && now < cached.second) return cached  // still valid
-
-        fun windowFor(date: java.time.LocalDate): Pair<Long, Long>? {
+        fun windowFor(date: LocalDate): Pair<Long, Long>? {
             val (rise, set) = SunriseSunset.compute(date, lat, lon) ?: return null
             return Pair(rise - offsetMs, set + offsetMs)
         }
 
-        val today = java.time.LocalDate.now()
-        val todayWindow = windowFor(today)
-        val window = when {
-            todayWindow != null && now < todayWindow.second -> todayWindow
-            else -> windowFor(today.plusDays(1))
-        } ?: return null
+        // Returns the start of the next day that has a sunrise, or falls back to
+        // tomorrow's local midnight (handles multi-day polar-night runs).
+        fun nextWindowStart(from: LocalDate): Long {
+            for (i in 1..7) {
+                val w = windowFor(from.plusDays(i.toLong()))
+                if (w != null) return w.first
+            }
+            return from.plusDays(1).atStartOfDay(tz).toInstant().toEpochMilli()
+        }
 
-        SettingsManager.setCachedDaylightWindow(context, window.first, window.second)
-        Log.d(TAG, "Daylight window computed: ${java.util.Date(window.first)} – ${java.util.Date(window.second)}")
-        return window
-    }
+        val today  = LocalDate.now(tz)
+        val window = windowFor(today)
 
-    private fun scheduleDaylightAlarm(
-        context: Context, alarmManager: AlarmManager, pending: PendingIntent
-    ) {
-        val window = resolveDaylightWindow(context)
-            ?: return scheduleIntervalAlarm(context, alarmManager, pending)  // polar: fall back
+        if (window == null) {
+            // Polar day: record all 24 h at the normal interval.
+            return scheduleIntervalAlarm(context, alarmManager, pending)
+        }
 
-        val intervalMs = SettingsManager.getIntervalSeconds(context).toLong().coerceAtLeast(1L) * 1_000L
-        val now = System.currentTimeMillis()
-
-        val triggerAt = when {
-            now < window.first  -> window.first   // before dawn: wake at dawn
-            now >= window.second -> window.first  // after dusk: window is already tomorrow's
+        val triggerAt: Long = when {
+            // Before dawn: jump straight to window start — no intermediate alarms.
+            now < window.first -> window.first
+            // After dusk: jump to next day's window start — skip the night entirely.
+            now >= window.second -> nextWindowStart(today)
+            // Within window: next interval capture, capped at window end.
             else -> ((now / intervalMs + 1) * intervalMs).coerceAtMost(window.second)
         }
 
@@ -94,8 +93,12 @@ object AlarmScheduler {
         Log.d(TAG, "Daylight alarm at ${java.util.Date(triggerAt)}")
     }
 
+    // ── Interval scheduling (original behaviour) ──────────────────────────────
+
     private fun scheduleIntervalAlarm(
-        context: Context, alarmManager: AlarmManager, pending: PendingIntent
+        context: Context,
+        alarmManager: AlarmManager,
+        pending: PendingIntent,
     ) {
         val intervalMs = SettingsManager.getIntervalSeconds(context).toLong()
             .coerceAtLeast(1L) * 1_000L
@@ -104,22 +107,36 @@ object AlarmScheduler {
         Log.d(TAG, "Interval alarm in ${intervalMs / 1000}s")
     }
 
+    // ── Shared alarm setter ───────────────────────────────────────────────────
+
     private fun setAlarm(
-        alarmManager: AlarmManager, type: Int, triggerAt: Long,
-        pending: PendingIntent, context: Context
+        alarmManager: AlarmManager,
+        type: Int,
+        triggerAt: Long,
+        pending: PendingIntent,
+        context: Context,
     ) {
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-                if (alarmManager.canScheduleExactAlarms())
+                if (alarmManager.canScheduleExactAlarms()) {
                     alarmManager.setExactAndAllowWhileIdle(type, triggerAt, pending)
-                else
+                } else {
                     alarmManager.setAndAllowWhileIdle(type, triggerAt, pending)
+                    Log.w(TAG, "Exact alarm permission not granted — using inexact alarm")
+                }
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
                 alarmManager.setExactAndAllowWhileIdle(type, triggerAt, pending)
             else ->
                 alarmManager.setExact(type, triggerAt, pending)
         }
+    }
+
+    /** Cancel any pending alarm (call when recording is disabled). */
+    fun cancel(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.cancel(buildPendingIntent(context))
+        Log.d(TAG, "Alarm cancelled")
     }
 
     private fun buildPendingIntent(context: Context): PendingIntent {
