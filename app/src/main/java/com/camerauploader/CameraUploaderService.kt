@@ -1,12 +1,10 @@
 package com.camerauploader
 
-import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.IntentFilter
-import android.location.LocationManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -38,7 +36,8 @@ class CameraUploaderService : Service(), LifecycleOwner {
         private const val CHANNEL_ID = "camera_uploader_channel"
         private const val NOTIFICATION_ID = 1
 
-        const val ACTION_CAPTURE = "com.camerauploader.ACTION_CAPTURE"
+        const val ACTION_CAPTURE          = "com.camerauploader.ACTION_CAPTURE"
+        const val ACTION_SETTINGS_CHANGED = "com.camerauploader.ACTION_SETTINGS_CHANGED"
     }
 
     // ── Threads ───────────────────────────────────────────────────────────────
@@ -87,8 +86,6 @@ class CameraUploaderService : Service(), LifecycleOwner {
         setupCamera()
         workerThread = HandlerThread("CameraWorker").also { it.start() }
         workerHandler = Handler(workerThread.looper)
-        if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDaylightOnly(this))
-            acquireLocationOnce()
     }
 
     override fun onDestroy() {
@@ -105,6 +102,10 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     @OptIn(ExperimentalCamera2Interop::class)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_SETTINGS_CHANGED) {
+            resetDayState()
+            lastCaptureDate = ""
+        }
         postWorker()
         return START_STICKY
     }
@@ -139,30 +140,6 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     private fun setupCamera() {
         cameraProvider = ProcessCameraProvider.getInstance(this).get()
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Location (one-time acquisition for daylight mode)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    @SuppressLint("MissingPermission")
-    private fun acquireLocationOnce() {
-        if (SettingsManager.hasLocation(this)) return
-        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
-        val providers = listOf(
-            LocationManager.NETWORK_PROVIDER,
-            LocationManager.GPS_PROVIDER,
-            LocationManager.PASSIVE_PROVIDER,
-        )
-        val loc = providers.firstNotNullOfOrNull { p ->
-            runCatching { lm.getLastKnownLocation(p) }.getOrNull()
-        }
-        if (loc != null) {
-            SettingsManager.setLocation(this, loc.latitude.toFloat(), loc.longitude.toFloat())
-            Log.i(TAG, "Location cached: ${loc.latitude}, ${loc.longitude}")
-        } else {
-            Log.w(TAG, "Location not yet available — will retry on next start")
-        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

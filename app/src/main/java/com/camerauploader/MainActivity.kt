@@ -1,8 +1,10 @@
 package com.camerauploader
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -10,26 +12,27 @@ import android.util.Size
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.*
-import androidx.annotation.OptIn
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        private const val REQUEST_PERMISSIONS = 100
+        private const val REQUEST_PERMISSIONS    = 100
+        private const val REQUEST_LOCATION_FILL = 101
     }
+
+    private var latInput: EditText? = null
+    private var lonInput: EditText? = null
+    private var pendingLocationFill = false
 
     private val requiredPermissions: Array<String>
         get() {
             val perms = mutableListOf(Manifest.permission.CAMERA)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                 perms += Manifest.permission.POST_NOTIFICATIONS
-            if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDaylightOnly(this))
-                perms += Manifest.permission.ACCESS_COARSE_LOCATION
             return perms.toTypedArray()
         }
 
@@ -191,25 +194,45 @@ class MainActivity : AppCompatActivity() {
             isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked
         }
         val daylightNote = TextView(this).apply {
-            text = "Positive = wider window (start before sunrise, stop after sunset). " +
-                   "Requires ACCESS_COARSE_LOCATION."
+            text = "Positive = wider window (start before sunrise, stop after sunset)."
             textSize = 11f
             setTextColor(0xFF888888.toInt())
             setPadding(indentPx, dpToPx(2), 0, 0)
         }
-        val locationInfo = TextView(this).apply {
-            val lat = s.getLocationLat(this@MainActivity)
-            text = if (lat.isNaN()) "    Location: not yet acquired"
-                   else "    Location: %.4f, %.4f".format(lat, s.getLocationLon(this@MainActivity))
-            textSize = 11f
-            setTextColor(0xFF888888.toInt())
-            setPadding(0, dpToPx(2), 0, 0)
+        val storedLat = s.getLocationLat(this@MainActivity)
+        val storedLon = s.getLocationLon(this@MainActivity)
+        val latLabel = label("    Latitude").apply {
+            isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked
+        }
+        latInput = editText(
+            value     = if (storedLat.isNaN()) "" else "%.6f".format(storedLat),
+            hint      = "e.g. 37.7749",
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+        ).also { it.isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked }
+        val lonLabel = label("    Longitude").apply {
+            isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked
+        }
+        lonInput = editText(
+            value     = if (storedLon.isNaN()) "" else "%.6f".format(storedLon),
+            hint      = "e.g. -122.4194",
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+        ).also { it.isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked }
+        val useDeviceLocationBtn = Button(this).apply {
+            text = "Use device location"
+            setPadding(indentPx, 0, 0, 0)
+            isEnabled = dayByDayCheck.isChecked && daylightCheck.isChecked
+            setOnClickListener { fillLocationFromDevice() }
         }
 
         fun updateDaylightSubItems() {
             val on = dayByDayCheck.isChecked && daylightCheck.isChecked
             daylightOffsetLabel.isEnabled = on
             daylightOffsetInput.isEnabled = on
+            latLabel.isEnabled = on
+            latInput?.isEnabled = on
+            lonLabel.isEnabled = on
+            lonInput?.isEnabled = on
+            useDeviceLocationBtn.isEnabled = on
         }
 
         dayByDayCheck.setOnCheckedChangeListener { _, checked ->
@@ -300,7 +323,11 @@ class MainActivity : AppCompatActivity() {
             addView(daylightOffsetLabel)
             addView(daylightOffsetInput)
             addView(daylightNote)
-            addView(locationInfo)
+            addView(latLabel)
+            addView(latInput!!)
+            addView(lonLabel)
+            addView(lonInput!!)
+            addView(useDeviceLocationBtn)
             addView(av1Header)
             addView(av1CrfLabel)
             addView(av1CrfInput)
@@ -332,6 +359,15 @@ class MainActivity : AppCompatActivity() {
                     toast("Interval must be at least 1 second")
                     showSettingsDialog(availableSizes); return@setPositiveButton
                 }
+                if (dayByDayCheck.isChecked && daylightCheck.isChecked) {
+                    val latVal = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
+                    val lonVal = lonInput?.text?.toString()?.trim()?.toDoubleOrNull()
+                    if (latVal == null || latVal !in -90.0..90.0 ||
+                        lonVal == null || lonVal !in -180.0..180.0) {
+                        toast("Enter a valid latitude (−90..90) and longitude (−180..180) for daylight mode")
+                        showSettingsDialog(availableSizes); return@setPositiveButton
+                    }
+                }
 
                 s.setUploadUrl(this, url)
                 s.setIntervalSeconds(this, intervalSecs)
@@ -352,6 +388,9 @@ class MainActivity : AppCompatActivity() {
                     userInput.text.toString().trim(),
                     passInput.text.toString()
                 )
+                val latVal = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
+                val lonVal = lonInput?.text?.toString()?.trim()?.toDoubleOrNull()
+                if (latVal != null && lonVal != null) s.setLocation(this, latVal.toFloat(), lonVal.toFloat())
 
                 proceedAfterSettingsSaved()
             }
@@ -392,14 +431,24 @@ class MainActivity : AppCompatActivity() {
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_PERMISSIONS) {
-            if (allPermissionsGranted()) {
-                restartUploaderService()
-                toast("Uploader running ✓")
-            } else {
-                toast("Camera permission is required for the uploader to work.")
+        when (requestCode) {
+            REQUEST_LOCATION_FILL -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                    fillLocationFromDevice()
+                } else {
+                    toast("Location permission denied — enter coordinates manually")
+                }
+                pendingLocationFill = false
             }
-            finish()
+            REQUEST_PERMISSIONS -> {
+                if (allPermissionsGranted()) {
+                    restartUploaderService()
+                    toast("Uploader running ✓")
+                } else {
+                    toast("Camera permission is required for the uploader to work.")
+                }
+                finish()
+            }
         }
     }
 
@@ -409,13 +458,41 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
     }
 
-    @OptIn(ExperimentalCamera2Interop::class)
     private fun restartUploaderService() {
         AlarmScheduler.scheduleNext(this)
         val intent = Intent(this, CameraUploaderService::class.java).apply {
-            action = CameraUploaderWorker.ACTION_CAPTURE
+            action = CameraUploaderService.ACTION_SETTINGS_CHANGED
         }
         startForegroundService(intent)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun fillLocationFromDevice() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingLocationFill = true
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION),
+                REQUEST_LOCATION_FILL
+            )
+            return
+        }
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        val providers = listOf(
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.GPS_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER,
+        )
+        val loc = providers.firstNotNullOfOrNull { p ->
+            runCatching { lm.getLastKnownLocation(p) }.getOrNull()
+        }
+        if (loc != null) {
+            latInput?.setText("%.6f".format(loc.latitude))
+            lonInput?.setText("%.6f".format(loc.longitude))
+        } else {
+            toast("Location not available — enter manually or try again later")
+        }
     }
 
     private fun label(text: String) = TextView(this).apply {
