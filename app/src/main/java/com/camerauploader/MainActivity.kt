@@ -486,9 +486,9 @@ class MainActivity : AppCompatActivity() {
         }
         val lm = getSystemService(LOCATION_SERVICE) as LocationManager
         val providers = listOf(
-            LocationManager.GPS_PROVIDER,
-            LocationManager.NETWORK_PROVIDER,
             LocationManager.PASSIVE_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.GPS_PROVIDER,
         )
         val loc = providers.firstNotNullOfOrNull { p ->
             runCatching { lm.getLastKnownLocation(p) }.getOrNull()
