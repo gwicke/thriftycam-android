@@ -15,6 +15,9 @@ object AlarmScheduler {
     private const val TAG = "AlarmScheduler"
     private const val REQUEST_CODE = 0
 
+    private enum class ThresholdType { SUNRISE, SUNSET, DAY_CHANGE }
+    private data class DaylightThreshold(val ms: Long, val type: ThresholdType)
+
     /**
      * Schedule (or reschedule) the next alarm.
      *
@@ -44,6 +47,62 @@ object AlarmScheduler {
 
     // ── Daylight-aware scheduling ─────────────────────────────────────────────
 
+    /**
+     * Finds the next solar event strictly after now, reusing the value cached in
+     * [SettingsManager] while it remains in the future.
+     *
+     * Event order per day: SUNRISE (window opens) → SUNSET (window closes) →
+     * DAY_CHANGE (solar midnight = midpoint of sunset/next-sunrise).
+     *
+     * Polar dates (null from [SunriseSunset.compute]) are skipped. Returns null
+     * only when 9 consecutive dates are polar, which signals an interval-mode fallback.
+     */
+    private fun resolveNextThreshold(
+        context: Context,
+        lat: Double,
+        lon: Double,
+        offsetMs: Long,
+    ): DaylightThreshold? {
+        val now = System.currentTimeMillis()
+        val tz  = ZoneId.systemDefault()
+
+        // Reuse cached threshold while it's still in the future.
+        val cached = SettingsManager.getNextThreshold(context)
+        if (cached != null && now < cached.first) {
+            val type = runCatching { ThresholdType.valueOf(cached.second) }.getOrNull()
+                       ?: ThresholdType.SUNRISE
+            return DaylightThreshold(cached.first, type)
+        }
+
+        // Scan forward to find the first event strictly after now.
+        var date = LocalDate.now(tz)
+        for (i in 0 until 9) {
+            val pair = SunriseSunset.compute(date, lat, lon)
+            if (pair == null) { date = date.plusDays(1); continue }  // polar: skip
+
+            val rise = pair.first - offsetMs
+            val set  = pair.second + offsetMs
+            // Solar midnight = midpoint between today's sunset and tomorrow's sunrise.
+            val tomorrowRise = SunriseSunset.compute(date.plusDays(1), lat, lon)
+                ?.first?.let { it - offsetMs }
+                ?: date.plusDays(1).atStartOfDay(tz).toInstant().toEpochMilli()
+            val dayChange = (set + tomorrowRise) / 2
+
+            val threshold = listOf(
+                DaylightThreshold(rise,      ThresholdType.SUNRISE),
+                DaylightThreshold(set,       ThresholdType.SUNSET),
+                DaylightThreshold(dayChange, ThresholdType.DAY_CHANGE),
+            ).firstOrNull { it.ms > now }
+
+            if (threshold != null) {
+                SettingsManager.setNextThreshold(context, threshold.ms, threshold.type.name)
+                return threshold
+            }
+            date = date.plusDays(1)
+        }
+        return null  // 9 consecutive polar dates → caller falls back to interval mode
+    }
+
     private fun scheduleDaylightAlarm(
         context: Context,
         alarmManager: AlarmManager,
@@ -55,42 +114,21 @@ object AlarmScheduler {
         val lat = SettingsManager.getLocationLat(context).toDouble()
         val lon = SettingsManager.getLocationLon(context).toDouble()
         val now = System.currentTimeMillis()
-        val tz  = ZoneId.systemDefault()
 
-        fun windowFor(date: LocalDate): Pair<Long, Long>? {
-            val (rise, set) = SunriseSunset.compute(date, lat, lon) ?: return null
-            return Pair(rise - offsetMs, set + offsetMs)
-        }
+        val threshold = resolveNextThreshold(context, lat, lon, offsetMs)
+            ?: return scheduleIntervalAlarm(context, alarmManager, pending)
 
-        // Returns the start of the next day that has a sunrise, or falls back to
-        // tomorrow's local midnight (handles multi-day polar-night runs).
-        fun nextWindowStart(from: LocalDate): Long {
-            for (i in 1..7) {
-                val w = windowFor(from.plusDays(i.toLong()))
-                if (w != null) return w.first
-            }
-            return from.plusDays(1).atStartOfDay(tz).toInstant().toEpochMilli()
-        }
-
-        val today  = LocalDate.now(tz)
-        val window = windowFor(today)
-
-        if (window == null) {
-            // Polar day: record all 24 h at the normal interval.
-            return scheduleIntervalAlarm(context, alarmManager, pending)
-        }
-
-        val triggerAt: Long = when {
-            // Before dawn: jump straight to window start — no intermediate alarms.
-            now < window.first -> window.first
-            // After dusk: jump to next day's window start — skip the night entirely.
-            now >= window.second -> nextWindowStart(today)
-            // Within window: next interval capture, capped at window end.
-            else -> ((now / intervalMs + 1) * intervalMs).coerceAtMost(window.second)
+        val triggerAt = when (threshold.type) {
+            // Outside the recording window: jump directly to the next boundary event.
+            ThresholdType.SUNRISE, ThresholdType.DAY_CHANGE -> threshold.ms
+            // Inside the recording window (SUNSET is next): next interval, capped at sunset.
+            ThresholdType.SUNSET ->
+                ((now / intervalMs + 1) * intervalMs).coerceAtMost(threshold.ms)
         }
 
         setAlarm(alarmManager, AlarmManager.RTC_WAKEUP, triggerAt, pending, context)
-        Log.d(TAG, "Daylight alarm at ${java.util.Date(triggerAt)}")
+        Log.d(TAG, "Daylight alarm at ${java.util.Date(triggerAt)} " +
+                   "(next ${threshold.type} at ${java.util.Date(threshold.ms)})")
     }
 
     // ── Interval scheduling (original behaviour) ──────────────────────────────
@@ -142,6 +180,7 @@ object AlarmScheduler {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         alarmManager.cancel(buildPendingIntent(context))
         SettingsManager.setNextAlarmMs(context, 0L)
+        SettingsManager.clearNextThreshold(context)
         Log.d(TAG, "Alarm cancelled")
     }
 

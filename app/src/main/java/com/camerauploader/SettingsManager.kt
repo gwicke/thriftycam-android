@@ -24,7 +24,9 @@ object SettingsManager {
     private const val KEY_AV1_ENC_MODE        = "av1_enc_mode"
     private const val KEY_LOCATION_LAT        = "location_lat"
     private const val KEY_LOCATION_LON        = "location_lon"
-    private const val KEY_NEXT_ALARM_MS       = "next_alarm_ms"
+    private const val KEY_NEXT_ALARM_MS         = "next_alarm_ms"
+    private const val KEY_NEXT_THRESHOLD_MS     = "next_threshold_ms"
+    private const val KEY_NEXT_THRESHOLD_TYPE   = "next_threshold_type"
 
     const val DEFAULT_INTERVAL_SECONDS = 300
 
@@ -141,7 +143,10 @@ object SettingsManager {
         prefs(context).getInt(KEY_DAYLIGHT_OFFSET_MIN, 0)
 
     fun setDaylightOffsetMinutes(context: Context, minutes: Int) =
-        prefs(context).edit { putInt(KEY_DAYLIGHT_OFFSET_MIN, minutes) }
+        prefs(context).edit {
+            putInt(KEY_DAYLIGHT_OFFSET_MIN, minutes)
+            putLong(KEY_NEXT_THRESHOLD_MS, -1L)
+        }
 
     // ── Location (cached once for sunrise/sunset) ─────────────────────────────
 
@@ -155,6 +160,7 @@ object SettingsManager {
         prefs(context).edit {
             putFloat(KEY_LOCATION_LAT, lat)
             putFloat(KEY_LOCATION_LON, lon)
+            putLong(KEY_NEXT_THRESHOLD_MS, -1L)
         }
 
     fun hasLocation(context: Context): Boolean =
@@ -181,6 +187,26 @@ object SettingsManager {
 
     fun setNextAlarmMs(context: Context, epochMs: Long) =
         prefs(context).edit { putLong(KEY_NEXT_ALARM_MS, epochMs) }
+
+    // ── Daylight threshold cache ──────────────────────────────────────────────
+    // Stores the next SUNRISE / SUNSET / DAY_CHANGE event time so AlarmScheduler
+    // can reuse it across alarm firings without recomputing solar times.
+
+    fun getNextThreshold(context: Context): Pair<Long, String>? {
+        val ms   = prefs(context).getLong(KEY_NEXT_THRESHOLD_MS, -1L)
+        if (ms < 0) return null
+        val type = prefs(context).getString(KEY_NEXT_THRESHOLD_TYPE, "") ?: ""
+        return if (type.isBlank()) null else Pair(ms, type)
+    }
+
+    fun setNextThreshold(context: Context, ms: Long, type: String) =
+        prefs(context).edit {
+            putLong(KEY_NEXT_THRESHOLD_MS, ms)
+            putString(KEY_NEXT_THRESHOLD_TYPE, type)
+        }
+
+    fun clearNextThreshold(context: Context) =
+        prefs(context).edit { putLong(KEY_NEXT_THRESHOLD_MS, -1L) }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
