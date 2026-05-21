@@ -21,7 +21,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQUEST_PERMISSIONS    = 100
-        private const val REQUEST_LOCATION_FILL = 101
+        private const val REQUEST_LOCATION_FILL  = 101
+        private const val REQUEST_CAMERA_UPFRONT = 102
     }
 
     private var latInput: EditText? = null
@@ -50,27 +51,25 @@ class MainActivity : AppCompatActivity() {
     // ── Resolution loading ────────────────────────────────────────────────────
 
     private fun loadResolutionsAndShowDialog() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_UPFRONT
+            )
+            return
+        }
         val progress = AlertDialog.Builder(this)
             .setMessage("Loading camera resolutions…")
             .setCancelable(false)
             .create()
-
-        val cameraGranted = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (cameraGranted) {
-            progress.show()
-            Thread {
-                val sizes = ResolutionHelper.getSupportedSizes(applicationContext)
-                runOnUiThread {
-                    progress.dismiss()
-                    showSettingsDialog(sizes)
-                }
-            }.start()
-        } else {
-            showSettingsDialog(emptyList())
-        }
+        progress.show()
+        Thread {
+            val sizes = ResolutionHelper.getSupportedSizes(applicationContext)
+            runOnUiThread {
+                progress.dismiss()
+                showSettingsDialog(sizes)
+            }
+        }.start()
     }
 
     // ── Settings dialog ───────────────────────────────────────────────────────
@@ -432,6 +431,13 @@ class MainActivity : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         when (requestCode) {
+            REQUEST_CAMERA_UPFRONT -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                    loadResolutionsAndShowDialog()
+                } else {
+                    showSettingsDialog(emptyList())
+                }
+            }
             REQUEST_LOCATION_FILL -> {
                 if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                     fillLocationFromDevice()
