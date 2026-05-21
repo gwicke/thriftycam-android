@@ -247,7 +247,9 @@ class CameraUploaderService : Service(), LifecycleOwner {
             httpClient.newCall(req).execute().use { resp ->
                 if (resp.isSuccessful) {
                     Log.i(TAG, "Upload OK: ${resp.code}")
-                    updateNotification("Last upload: ${DateFormat.format("HH:mm:ss", timestamp)} ✓")
+                    val nextMs = SettingsManager.getNextAlarmMs(this)
+                    val nextStr = if (nextMs > 0) "  Next: ${DateFormat.format("HH:mm:ss", nextMs)}" else ""
+                    updateNotification("Last: ${DateFormat.format("HH:mm:ss", timestamp)} ✓$nextStr")
                 } else {
                     Log.w(TAG, "Upload failed: HTTP ${resp.code}")
                     updateNotification("Upload failed (HTTP ${resp.code})")

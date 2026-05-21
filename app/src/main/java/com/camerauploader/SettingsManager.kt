@@ -24,6 +24,7 @@ object SettingsManager {
     private const val KEY_AV1_ENC_MODE        = "av1_enc_mode"
     private const val KEY_LOCATION_LAT        = "location_lat"
     private const val KEY_LOCATION_LON        = "location_lon"
+    private const val KEY_NEXT_ALARM_MS       = "next_alarm_ms"
 
     const val DEFAULT_INTERVAL_SECONDS = 300
 
@@ -172,6 +173,14 @@ object SettingsManager {
 
     fun setAv1EncMode(context: Context, mode: Int) =
         prefs(context).edit { putInt(KEY_AV1_ENC_MODE, mode.coerceIn(0, 10)) }
+
+    // ── Next scheduled alarm (wall-clock epoch ms) ────────────────────────────
+
+    fun getNextAlarmMs(context: Context): Long =
+        prefs(context).getLong(KEY_NEXT_ALARM_MS, 0L)
+
+    fun setNextAlarmMs(context: Context, epochMs: Long) =
+        prefs(context).edit { putLong(KEY_NEXT_ALARM_MS, epochMs) }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -116,6 +116,11 @@ object AlarmScheduler {
         pending: PendingIntent,
         context: Context,
     ) {
+        // Convert to wall-clock epoch ms for display (elapsed-realtime alarms need adjustment).
+        val wallClock = if (type == AlarmManager.RTC_WAKEUP) triggerAt
+                        else System.currentTimeMillis() + (triggerAt - SystemClock.elapsedRealtime())
+        SettingsManager.setNextAlarmMs(context, wallClock)
+
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
                 if (alarmManager.canScheduleExactAlarms()) {
@@ -136,6 +141,7 @@ object AlarmScheduler {
     fun cancel(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         alarmManager.cancel(buildPendingIntent(context))
+        SettingsManager.setNextAlarmMs(context, 0L)
         Log.d(TAG, "Alarm cancelled")
     }
 
