@@ -57,7 +57,9 @@ object SunriseSunset {
         // Local mean time, then convert to UTC
         val UT = (H + RA - 0.06571 * t - 6.622 - lngHour).mod(24.0)
 
-        val midnight = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        val dayOffset = t.toLong() - date.dayOfYear
+        val anchorDate = date.plusDays(dayOffset)
+        val midnight = anchorDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
         return midnight + (UT * 3_600_000.0).toLong()
     }
 

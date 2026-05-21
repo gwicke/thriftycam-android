@@ -78,21 +78,20 @@ object AlarmScheduler {
         var date = LocalDate.now(tz)
         for (i in 0 until 9) {
             val pair = SunriseSunset.compute(date, lat, lon)
-            if (pair == null) { date = date.plusDays(1); continue }  // polar: skip
+            val candidates = if (pair == null) {
+                // Polar day/night: advance to civil midnight of next day.
+                val midnight = date.plusDays(1).atStartOfDay(tz).toInstant().toEpochMilli()
+                listOf(DaylightThreshold(midnight, ThresholdType.DAY_CHANGE))
+            } else {
+                val rise = pair.first - offsetMs
+                val set  = pair.second + offsetMs
+                listOf(
+                    DaylightThreshold(rise, ThresholdType.SUNRISE),
+                    DaylightThreshold(set,  ThresholdType.SUNSET),
+                )
+            }
 
-            val rise = pair.first - offsetMs
-            val set  = pair.second + offsetMs
-            // Solar midnight = midpoint between today's sunset and tomorrow's sunrise.
-            val tomorrowRise = SunriseSunset.compute(date.plusDays(1), lat, lon)
-                ?.first?.let { it - offsetMs }
-                ?: date.plusDays(1).atStartOfDay(tz).toInstant().toEpochMilli()
-            val dayChange = (set + tomorrowRise) / 2
-
-            val threshold = listOf(
-                DaylightThreshold(rise,      ThresholdType.SUNRISE),
-                DaylightThreshold(set,       ThresholdType.SUNSET),
-                DaylightThreshold(dayChange, ThresholdType.DAY_CHANGE),
-            ).firstOrNull { it.ms > now }
+            val threshold = candidates.firstOrNull { it.ms > now }
 
             if (threshold != null) {
                 SettingsManager.setNextThreshold(context, threshold.ms, threshold.type.name)
