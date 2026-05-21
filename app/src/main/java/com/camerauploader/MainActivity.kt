@@ -474,20 +474,20 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("MissingPermission")
     private fun fillLocationFromDevice() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
             pendingLocationFill = true
             ActivityCompat.requestPermissions(
                 this,
-                arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION),
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
                 REQUEST_LOCATION_FILL
             )
             return
         }
         val lm = getSystemService(LOCATION_SERVICE) as LocationManager
         val providers = listOf(
-            LocationManager.NETWORK_PROVIDER,
             LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
             LocationManager.PASSIVE_PROVIDER,
         )
         val loc = providers.firstNotNullOfOrNull { p ->

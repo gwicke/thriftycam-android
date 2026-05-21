@@ -12,8 +12,9 @@
     <!-- Exact alarms for reliable interval captures (Android 12+) -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    <!-- One-time coarse location lookup for daylight-hours recording mode -->
+    <!-- Location for daylight-hours recording mode; FINE enables GPS without cell service -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <uses-feature android:name="android.hardware.camera" android:required="true" />
 
