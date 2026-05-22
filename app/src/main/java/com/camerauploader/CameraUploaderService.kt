@@ -238,7 +238,7 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
         updateNotification("Uploading ${bytes.size / 1024} KB…")
         val req = Request.Builder()
-            .url("$dirUrl/$timestamp.$ext")
+            .url("$dirUrl/$captureTime.$ext")
             .put(bytes.toRequestBody(mimeType.toMediaType()))
             .header("x-sensor-data", sensorData)
             .also { SettingsManager.getBasicAuthHeader(this)?.let { h -> it.header("Authorization", h) } }
