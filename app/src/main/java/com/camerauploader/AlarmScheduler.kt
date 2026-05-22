@@ -7,16 +7,12 @@ import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
-import java.time.LocalDate
 import java.time.ZoneId
 
 object AlarmScheduler {
 
     private const val TAG = "AlarmScheduler"
     private const val REQUEST_CODE = 0
-
-    private enum class ThresholdType { SUNRISE, SUNSET, DAY_CHANGE }
-    private data class DaylightThreshold(val ms: Long, val type: ThresholdType)
 
     /**
      * Schedule (or reschedule) the next alarm.
@@ -48,14 +44,8 @@ object AlarmScheduler {
     // ── Daylight-aware scheduling ─────────────────────────────────────────────
 
     /**
-     * Finds the next solar event strictly after now, reusing the value cached in
-     * [SettingsManager] while it remains in the future.
-     *
-     * Event order per day: SUNRISE (window opens) → SUNSET (window closes) →
-     * DAY_CHANGE (solar midnight = midpoint of sunset/next-sunrise).
-     *
-     * Polar dates (null from [SunriseSunset.compute]) are skipped. Returns null
-     * only when 9 consecutive dates are polar, which signals an interval-mode fallback.
+     * Caching wrapper around [findNextThreshold]. Reuses the threshold stored in
+     * [SettingsManager] while it remains in the future, then recomputes and persists.
      */
     private fun resolveNextThreshold(
         context: Context,
@@ -64,7 +54,6 @@ object AlarmScheduler {
         offsetMs: Long,
     ): DaylightThreshold? {
         val now = System.currentTimeMillis()
-        val tz  = ZoneId.systemDefault()
 
         // Reuse cached threshold while it's still in the future.
         val cached = SettingsManager.getNextThreshold(context)
@@ -74,32 +63,10 @@ object AlarmScheduler {
             return DaylightThreshold(cached.first, type)
         }
 
-        // Scan forward to find the first event strictly after now.
-        var date = LocalDate.now(tz)
-        for (i in 0 until 9) {
-            val pair = SunriseSunset.compute(date, lat, lon)
-            val candidates = if (pair == null) {
-                // Polar day/night: advance to civil midnight of next day.
-                val midnight = date.plusDays(1).atStartOfDay(tz).toInstant().toEpochMilli()
-                listOf(DaylightThreshold(midnight, ThresholdType.DAY_CHANGE))
-            } else {
-                val rise = pair.first - offsetMs
-                val set  = pair.second + offsetMs
-                listOf(
-                    DaylightThreshold(rise, ThresholdType.SUNRISE),
-                    DaylightThreshold(set,  ThresholdType.SUNSET),
-                )
-            }
-
-            val threshold = candidates.firstOrNull { it.ms > now }
-
-            if (threshold != null) {
-                SettingsManager.setNextThreshold(context, threshold.ms, threshold.type.name)
-                return threshold
-            }
-            date = date.plusDays(1)
-        }
-        return null  // 9 consecutive polar dates → caller falls back to interval mode
+        val threshold = findNextThreshold(now, lat, lon, offsetMs, ZoneId.systemDefault())
+            ?: return null
+        SettingsManager.setNextThreshold(context, threshold.ms, threshold.type.name)
+        return threshold
     }
 
     private fun scheduleDaylightAlarm(
@@ -118,10 +85,11 @@ object AlarmScheduler {
             ?: return scheduleIntervalAlarm(context, alarmManager, pending)
 
         val triggerAt = when (threshold.type) {
-            // Outside the recording window: jump directly to the next boundary event.
-            ThresholdType.SUNRISE, ThresholdType.DAY_CHANGE -> threshold.ms
-            // Inside the recording window (SUNSET is next): next interval, capped at sunset.
-            ThresholdType.SUNSET ->
+            // Outside the recording window: jump directly to when recording opens.
+            ThresholdType.SUNRISE -> threshold.ms
+            // Inside the recording window (or at a day-boundary within it): next
+            // interval capture, capped at the boundary so we don't overshoot.
+            ThresholdType.SUNSET, ThresholdType.DAY_CHANGE ->
                 ((now / intervalMs + 1) * intervalMs).coerceAtMost(threshold.ms)
         }
 
