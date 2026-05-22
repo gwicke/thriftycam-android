@@ -28,6 +28,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 
 class CameraUploaderService : Service(), LifecycleOwner {
@@ -54,7 +55,12 @@ class CameraUploaderService : Service(), LifecycleOwner {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    var captureTime = 0L
+    // ── Capture-time FIFO ────────────────────────────────────────────────────
+    // Passes the epoch-ms timestamp of each captured frame to the encoder reader
+    // loop / upload thread so putImage uses the right value even when encoding is
+    // slow.  Capacity = 2: if a third in-flight capture would be added, that
+    // capture is aborted and the next alarm iteration retries.
+    private val captureTimeFifo = LinkedBlockingDeque<Long>(2)
 
     // ── Executor: getPacket() loop (AV1) or HTTP POST (JPEG) ─────────────────
     private val uploadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -112,8 +118,6 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     @OptIn(ExperimentalCamera2Interop::class)
     private fun postWorker() {
-        captureTime = System.currentTimeMillis()
-
         if (SettingsManager.isDayByDayMode(this)) {
             val today = LocalDate.now(ZoneId.systemDefault()).toString()
             if (lastCaptureDate.isNotEmpty() && lastCaptureDate != today) {
@@ -132,6 +136,7 @@ class CameraUploaderService : Service(), LifecycleOwner {
     /** Called at each day boundary: resets directory and encoder state. */
     private fun resetDayState() {
         lastMkcolDate = ""
+        captureTimeFifo.clear()
         val old = av1Encoder
         av1Encoder = null
         isFirstAv1Frame = true
@@ -163,8 +168,12 @@ class CameraUploaderService : Service(), LifecycleOwner {
             isFirstAv1Frame = true
             startAv1ReaderLoop(enc)
         }
-        captureTime = System.currentTimeMillis()
         val enc = av1Encoder ?: return
+        if (!captureTimeFifo.offerLast(System.currentTimeMillis())) {
+            Log.w(TAG, "Capture queue full (2 in-flight); skipping frame — encoder may be slow")
+            updateNotification("Capture skipped — encoder busy")
+            return
+        }
         if (isFirstAv1Frame) {
             isFirstAv1Frame = false
             enc.sendFirstFrame(frame.buf, frame.yStride, frame.uvStride)
@@ -184,8 +193,9 @@ class CameraUploaderService : Service(), LifecycleOwner {
             while (true) {
                 enc.getPacket(pkt)
                 when (pkt.status) {
-                    Av1Encoder.Status.OK -> pkt.payload?.let {
-                        putImage(it, "video/AV1", if (pkt.isKey) "key.av1" else "av1")
+                    Av1Encoder.Status.OK -> pkt.payload?.let { buf ->
+                        val ct = captureTimeFifo.pollFirst() ?: System.currentTimeMillis()
+                        putImage(buf, "video/AV1", if (pkt.isKey) "key.av1" else "av1", ct)
                     }
                     else -> {
                         enc.close()  // close via local ref (safe even after field was nulled)
@@ -203,7 +213,8 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     /** PUT a JPEG to [uploadExecutor]. */
     fun uploadJpeg(jpeg: ByteArray) {
-        uploadExecutor.execute { putImage(jpeg, "image/jpeg", "jpg") }
+        val ct = System.currentTimeMillis()
+        uploadExecutor.execute { putImage(jpeg, "image/jpeg", "jpg", ct) }
     }
 
     /**
@@ -211,7 +222,7 @@ class CameraUploaderService : Service(), LifecycleOwner {
      * mode is active). Sensor metadata travels in the [x-sensor-data] header as JSON so
      * the URL and body stay clean.
      */
-    private fun putImage(bytes: ByteArray, mimeType: String, ext: String) {
+    private fun putImage(bytes: ByteArray, mimeType: String, ext: String, captureTime: Long) {
         val baseUrl = SettingsManager.getUploadUrl(this)
         if (baseUrl.isBlank()) {
             updateNotification("No URL — tap icon to configure.")
