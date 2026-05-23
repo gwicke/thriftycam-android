@@ -9,15 +9,11 @@ import android.os.Build
 import android.util.Log
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
-import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.FocusMeteringAction
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
-import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -93,15 +89,27 @@ class CameraUploaderWorker(
             .setTargetRotation(android.view.Surface.ROTATION_90)
             .setResolutionSelector(resolutionSelector)
 
-        val afEnabled = SettingsManager.isAfEnabled(applicationContext)
-        if (!afEnabled) {
-            val focusDistance = SettingsManager.getFocusDistance(applicationContext)
-            Camera2Interop.Extender(captureBuilder)
-                .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                .setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
-                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                .setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT)
+        val afEnabled     = SettingsManager.isAfEnabled(applicationContext)
+        val focusDistance = SettingsManager.getFocusDistance(applicationContext)
+
+        fun <T> apply3A(ext: Camera2Interop.Extender<T>) {
+            if (afEnabled) {
+                ext.setCaptureRequestOption(
+                    CaptureRequest.CONTROL_AF_MODE,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            } else {
+                ext.setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                   .setCaptureRequestOption(
+                        CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
+            }
+            ext.setCaptureRequestOption(
+                    CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+               .setCaptureRequestOption(
+                    CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT)
         }
+        apply3A(Camera2Interop.Extender(previewBuilder))
+        apply3A(Camera2Interop.Extender(captureBuilder))
 
         val secondaryUseCase: androidx.camera.core.UseCase = when (uploadMode) {
             SettingsManager.UploadMode.JPEG -> {
@@ -117,12 +125,12 @@ class CameraUploaderWorker(
         try {
             cameraProvider.unbindAll()
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
-            val camera = cameraProvider.bindToLifecycle(
+            cameraProvider.bindToLifecycle(
                 lifeOwner,
                 CameraSelector.DEFAULT_BACK_CAMERA,
                 preview, secondaryUseCase
             )
-            triggerAfAeLock(camera)
+            beginConvergenceWatch()
         } catch (e: Exception) {
             Log.e(TAG, "Camera bind failed", e)
             shutdownCamera()
@@ -186,20 +194,12 @@ class CameraUploaderWorker(
     // State machine trigger
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun triggerAfAeLock(camera: Camera) {
+    private fun beginConvergenceWatch() {
         val afEnabled = SettingsManager.isAfEnabled(applicationContext)
-        val meteringFlags = (if (afEnabled) FocusMeteringAction.FLAG_AF else 0) or
-            FocusMeteringAction.FLAG_AWB or FocusMeteringAction.FLAG_AE
-        updateNotification(if (afEnabled) "Locking AF + AE…" else "Locking AE…")
+        updateNotification(if (afEnabled) "Converging AF + AE…" else "Converging AE…")
         Log.d(TAG, "State → WAITING_3A (af=$afEnabled)")
-        captureState.set(State.WAITING_3A)
         stateEnteredAt = System.currentTimeMillis()
-        camera.cameraControl.startFocusAndMetering(
-            FocusMeteringAction.Builder(
-                SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(0.5f, 0.5f),
-                meteringFlags
-            ).disableAutoCancel().build()
-        )
+        captureState.set(State.WAITING_3A)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
