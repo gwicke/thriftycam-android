@@ -64,17 +64,21 @@ class MainActivity : AppCompatActivity() {
             .create()
         progress.show()
         Thread {
-            val sizes = ResolutionHelper.getSupportedSizes(applicationContext)
+            val sizes   = ResolutionHelper.getSupportedSizes(applicationContext)
+            val evRange = ExposureHelper.getEvRange(applicationContext)
             runOnUiThread {
                 progress.dismiss()
-                showSettingsDialog(sizes)
+                showSettingsDialog(sizes, evRange)
             }
         }.start()
     }
 
     // ── Settings dialog ───────────────────────────────────────────────────────
 
-    private fun showSettingsDialog(availableSizes: List<Size>) {
+    private fun showSettingsDialog(
+        availableSizes: List<Size>,
+        evRange: ExposureHelper.EvRange?,
+    ) {
         val s = SettingsManager
         val isFirstRun = !s.isConfigured(this)
         val pad = dpToPx(20)
@@ -205,6 +209,38 @@ class MainActivity : AppCompatActivity() {
             focusDistLabel.isEnabled = !checked
             focusDistSeek.isEnabled  = !checked
             focusDistValue.isEnabled = !checked
+        }
+
+        // ── Exposure compensation ─────────────────────────────────────────────
+        // Slider spans the device's reported CONTROL_AE_COMPENSATION_RANGE.
+        // progress 0 = range.min (darkest); progress max = range.max (brightest).
+        // Only built when the device reports a usable range.
+        var evHeader: TextView? = null
+        var evValue:  TextView? = null
+        var evSeek:   SeekBar?  = null
+        if (evRange != null) {
+            fun evLabel(comp: Int): String =
+                if (comp == 0) "0 EV (no compensation)"
+                else "%+.1f EV".format(comp * evRange.stepEv)
+
+            val savedComp = s.getEvCompensation(this).coerceIn(evRange.min, evRange.max)
+            evHeader = label("Exposure compensation")
+            evValue = TextView(this).apply {
+                text = evLabel(savedComp)
+                textSize = 12f
+                setPadding(0, dpToPx(2), 0, dpToPx(2))
+            }
+            evSeek = SeekBar(this).apply {
+                max = evRange.max - evRange.min
+                progress = savedComp - evRange.min
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: SeekBar, p: Int, fromUser: Boolean) {
+                        evValue?.text = evLabel(evRange.min + p)
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar) {}
+                    override fun onStopTrackingTouch(bar: SeekBar) {}
+                })
+            }
         }
 
         // ── Day-by-day recording ──────────────────────────────────────────────
@@ -369,6 +405,9 @@ class MainActivity : AppCompatActivity() {
             addView(focusDistLabel)
             addView(focusDistSeek)
             addView(focusDistValue)
+            evHeader?.let { addView(it) }
+            evSeek?.let   { addView(it) }
+            evValue?.let  { addView(it) }
             addView(dayByDayHeader)
             addView(dayByDayCheck)
             addView(dailyDirCheck)
@@ -406,11 +445,11 @@ class MainActivity : AppCompatActivity() {
 
                 if (url.isBlank() || !url.startsWith("http")) {
                     toast("Please enter a valid URL starting with https://")
-                    showSettingsDialog(availableSizes); return@setPositiveButton
+                    showSettingsDialog(availableSizes, evRange); return@setPositiveButton
                 }
                 if (intervalSecs < 1) {
                     toast("Interval must be at least 1 second")
-                    showSettingsDialog(availableSizes); return@setPositiveButton
+                    showSettingsDialog(availableSizes, evRange); return@setPositiveButton
                 }
                 if (dayByDayCheck.isChecked && daylightCheck.isChecked) {
                     val latVal = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
@@ -418,7 +457,7 @@ class MainActivity : AppCompatActivity() {
                     if (latVal == null || latVal !in -90.0..90.0 ||
                         lonVal == null || lonVal !in -180.0..180.0) {
                         toast("Enter a valid latitude (−90..90) and longitude (−180..180) for daylight mode")
-                        showSettingsDialog(availableSizes); return@setPositiveButton
+                        showSettingsDialog(availableSizes, evRange); return@setPositiveButton
                     }
                 }
 
@@ -428,6 +467,10 @@ class MainActivity : AppCompatActivity() {
                 s.setUploadMode(this, modeEntries[modeSpinner.selectedItemPosition].first)
                 s.setAfEnabled(this, afCheck.isChecked)
                 s.setFocusDistance(this, sliderToDiopters(focusDistSeek.progress))
+                val seek = evSeek
+                if (evRange != null && seek != null) {
+                    s.setEvCompensation(this, evRange.min + seek.progress)
+                }
                 s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
                 s.setDayByDayMode(this, dayByDayCheck.isChecked)
                 s.setDailyDirMode(this, dailyDirCheck.isChecked)
@@ -491,7 +534,7 @@ class MainActivity : AppCompatActivity() {
                 if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                     loadResolutionsAndShowDialog()
                 } else {
-                    showSettingsDialog(emptyList())
+                    showSettingsDialog(emptyList(), null)
                 }
             }
             REQUEST_LOCATION_FILL -> {

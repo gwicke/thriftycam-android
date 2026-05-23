@@ -92,6 +92,7 @@ class CameraUploaderWorker(
 
         val afEnabled     = SettingsManager.isAfEnabled(applicationContext)
         val focusDistance = SettingsManager.getFocusDistance(applicationContext)
+        val evComp        = SettingsManager.getEvCompensation(applicationContext)
 
         fun <T> apply3A(ext: Camera2Interop.Extender<T>) {
             ext.setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
@@ -109,6 +110,10 @@ class CameraUploaderWorker(
                     CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                .setCaptureRequestOption(
                     CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            if (evComp != 0) {
+                ext.setCaptureRequestOption(
+                    CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evComp)
+            }
         }
         fun <T> triggerPrecapture(ext: Camera2Interop.Extender<T>) {
             ext.setCaptureRequestOption(

@@ -184,6 +184,17 @@ object SettingsManager {
     fun setFocusDistance(context: Context, distance: Float) =
         prefs(context).edit { putFloat(KEY_FOCUS_DISTANCE, distance.coerceAtLeast(0.0f)) }
 
+    // ── Exposure compensation ──────────────────────────────────────────────────
+
+    private const val KEY_EV_COMPENSATION = "ev_compensation"  // Camera2 AE comp steps; 0 = none
+
+    /** AE exposure-compensation value in device steps (0 = no compensation). */
+    fun getEvCompensation(context: Context): Int =
+        prefs(context).getInt(KEY_EV_COMPENSATION, 0)
+
+    fun setEvCompensation(context: Context, steps: Int) =
+        prefs(context).edit { putInt(KEY_EV_COMPENSATION, steps) }
+
     // ── AV1 encoding parameters ───────────────────────────────────────────────
 
     fun getAv1Crf(context: Context): Int =
