@@ -711,15 +711,14 @@ class MainActivity : AppCompatActivity() {
     private fun showImageOverlay(bitmap: Bitmap) {
         val root = rootFrame ?: return
         dismissPreviewOverlay()
-        val iv = ImageView(this).apply {
+        val iv = ZoomableImageView(this).apply {
             setBackgroundColor(0xFF000000.toInt())
-            scaleType = ImageView.ScaleType.FIT_CENTER
             setImageBitmap(bitmap)
-            isClickable = true
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setOnClickListener { dismissPreviewOverlay() }
+            // Pinch / double-tap to zoom, drag to pan; a single tap dismisses.
+            onSingleTap = { dismissPreviewOverlay() }
         }
         root.addView(iv)
         previewOverlay = iv
