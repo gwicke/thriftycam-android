@@ -195,6 +195,17 @@ object SettingsManager {
     fun setEvCompensation(context: Context, steps: Int) =
         prefs(context).edit { putInt(KEY_EV_COMPENSATION, steps) }
 
+    // ── White balance (AWB) mode ───────────────────────────────────────────────
+
+    private const val KEY_AWB_MODE = "awb_mode"  // Camera2 CONTROL_AWB_MODE_* constant; 1 = AUTO
+
+    /** Camera2 AWB mode constant (CONTROL_AWB_MODE_*). Default 1 = AUTO. */
+    fun getAwbMode(context: Context): Int =
+        prefs(context).getInt(KEY_AWB_MODE, 1)  // 1 = CONTROL_AWB_MODE_AUTO
+
+    fun setAwbMode(context: Context, mode: Int) =
+        prefs(context).edit { putInt(KEY_AWB_MODE, mode) }
+
     // ── AV1 encoding parameters ───────────────────────────────────────────────
 
     fun getAv1Crf(context: Context): Int =

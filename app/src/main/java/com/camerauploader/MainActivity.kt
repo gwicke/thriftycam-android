@@ -64,11 +64,12 @@ class MainActivity : AppCompatActivity() {
             .create()
         progress.show()
         Thread {
-            val sizes   = ResolutionHelper.getSupportedSizes(applicationContext)
-            val evRange = ExposureHelper.getEvRange(applicationContext)
+            val sizes    = ResolutionHelper.getSupportedSizes(applicationContext)
+            val evRange  = ExposureHelper.getEvRange(applicationContext)
+            val awbModes = ExposureHelper.getAvailableAwbModes(applicationContext)
             runOnUiThread {
                 progress.dismiss()
-                showSettingsDialog(sizes, evRange)
+                showSettingsDialog(sizes, evRange, awbModes)
             }
         }.start()
     }
@@ -78,6 +79,7 @@ class MainActivity : AppCompatActivity() {
     private fun showSettingsDialog(
         availableSizes: List<Size>,
         evRange: ExposureHelper.EvRange?,
+        awbModes: List<ExposureHelper.AwbMode> = emptyList(),
     ) {
         val s = SettingsManager
         val isFirstRun = !s.isConfigured(this)
@@ -240,6 +242,25 @@ class MainActivity : AppCompatActivity() {
                     override fun onStartTrackingTouch(bar: SeekBar) {}
                     override fun onStopTrackingTouch(bar: SeekBar) {}
                 })
+            }
+        }
+
+        // ── White balance ─────────────────────────────────────────────────────
+        // Spinner is populated from the modes reported by the device; hidden when
+        // the list is empty (camera permission denied or no back camera found).
+        var awbSpinner: Spinner? = null
+        if (awbModes.isNotEmpty()) {
+            val savedAwbMode = s.getAwbMode(this)
+            awbSpinner = Spinner(this).apply {
+                val adapter = ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_item,
+                    awbModes.map { it.label }
+                ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+                setAdapter(adapter)
+                val savedIndex = awbModes.indexOfFirst { it.id == savedAwbMode }
+                    .takeIf { it >= 0 } ?: 0
+                setSelection(savedIndex)
             }
         }
 
@@ -408,6 +429,7 @@ class MainActivity : AppCompatActivity() {
             evHeader?.let { addView(it) }
             evSeek?.let   { addView(it) }
             evValue?.let  { addView(it) }
+            awbSpinner?.let { addView(label("White balance")); addView(it) }
             addView(dayByDayHeader)
             addView(dayByDayCheck)
             addView(dailyDirCheck)
@@ -470,6 +492,10 @@ class MainActivity : AppCompatActivity() {
                 val seek = evSeek
                 if (evRange != null && seek != null) {
                     s.setEvCompensation(this, evRange.min + seek.progress)
+                }
+                val awbSpin = awbSpinner
+                if (awbModes.isNotEmpty() && awbSpin != null) {
+                    s.setAwbMode(this, awbModes[awbSpin.selectedItemPosition].id)
                 }
                 s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
                 s.setDayByDayMode(this, dayByDayCheck.isChecked)
