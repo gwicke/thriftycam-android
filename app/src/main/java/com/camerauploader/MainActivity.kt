@@ -564,7 +564,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restartUploaderService() {
-        AlarmScheduler.scheduleNext(this)
+        // Schedule the first capture after a 5-second delay (time to position the
+        // camera); subsequent captures follow the normal interval from that point.
+        AlarmScheduler.scheduleFirstCapture(this)
         val intent = Intent(this, CameraUploaderService::class.java).apply {
             action = CameraUploaderService.ACTION_SETTINGS_CHANGED
         }

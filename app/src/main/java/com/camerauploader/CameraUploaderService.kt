@@ -111,6 +111,9 @@ class CameraUploaderService : Service(), LifecycleOwner {
         if (intent?.action == ACTION_SETTINGS_CHANGED) {
             resetDayState()
             lastCaptureDate = ""
+            // First capture is handled by the 5-second alarm scheduled by
+            // AlarmScheduler.scheduleFirstCapture(); don't shoot immediately.
+            return START_STICKY
         }
         postWorker()
         return START_STICKY

@@ -13,6 +13,7 @@ object AlarmScheduler {
 
     private const val TAG = "AlarmScheduler"
     private const val REQUEST_CODE = 0
+    private const val FIRST_CAPTURE_DELAY_MS = 5_000L
 
     /**
      * Schedule (or reschedule) the next alarm.
@@ -96,6 +97,26 @@ object AlarmScheduler {
         setAlarm(alarmManager, AlarmManager.RTC_WAKEUP, triggerAt, pending, context)
         Log.d(TAG, "Daylight alarm at ${java.util.Date(triggerAt)} " +
                    "(next ${threshold.type} at ${java.util.Date(threshold.ms)})")
+    }
+
+    // ── First-capture: fixed 5-second delay from UI start ────────────────────
+
+    /**
+     * Schedule the very first capture [FIRST_CAPTURE_DELAY_MS] after the user
+     * presses "Save & Start". This gives time to position the camera before the
+     * first shot. The alarm fires [AlarmReceiver], which then calls [scheduleNext]
+     * to resume normal interval scheduling.
+     */
+    fun scheduleFirstCapture(context: Context) {
+        if (!SettingsManager.isRecordingEnabled(context)) {
+            Log.d(TAG, "Recording disabled — not scheduling first capture")
+            return
+        }
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pending = buildPendingIntent(context)
+        val triggerAt = SystemClock.elapsedRealtime() + FIRST_CAPTURE_DELAY_MS
+        setAlarm(alarmManager, AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pending, context)
+        Log.d(TAG, "First capture in ${FIRST_CAPTURE_DELAY_MS / 1000}s")
     }
 
     // ── Interval scheduling (original behaviour) ──────────────────────────────
