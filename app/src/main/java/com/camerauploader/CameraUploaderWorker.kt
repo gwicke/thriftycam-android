@@ -99,6 +99,8 @@ class CameraUploaderWorker(
             Camera2Interop.Extender(captureBuilder)
                 .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                 .setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT)
         }
 
         val secondaryUseCase: androidx.camera.core.UseCase = when (uploadMode) {
@@ -162,14 +164,6 @@ class CameraUploaderWorker(
             || afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
             || afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED
 
-        val isTooDark = iso != null && iso > 1600
-            && exposureTimeNs != null && exposureTimeNs > 33_333_333
-        if (isTooDark or (aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED)) {
-            updateNotification("Too dark! (iso=$iso exposure=$exposureTimeNs)")
-            Log.d(TAG, "Too dark! (iso=$iso exposure=$exposureTimeNs ae=$aeState)")
-            return
-        }
-
         val aeReady = aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED
             || aeState == CaptureResult.CONTROL_AE_STATE_LOCKED
             || (Build.VERSION.SDK_INT < 29 && aeState == null)
@@ -177,6 +171,13 @@ class CameraUploaderWorker(
         if (afReady && aeReady) {
             Log.d(TAG, "3A converged in ${elapsed}ms (af=$afState ae=$aeState)")
             captureState.set(State.PICTURE_TAKEN)
+            val isTooDark = iso != null && iso > 1600
+                && exposureTimeNs != null && exposureTimeNs > 33_333_333
+            if (isTooDark or (aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED)) {
+                updateNotification("Too dark! (iso=$iso exposure=$exposureTimeNs)")
+                Log.d(TAG, "Too dark! (iso=$iso exposure=$exposureTimeNs ae=$aeState)")
+                return
+            }
             shootImageAndShutdown(imageCapture)
         }
     }
