@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Used by MainActivity when it needs to show the URL config dialog -->
-    <style name="Theme.CameraUploader" parent="Theme.AppCompat.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+    <!-- Dark theme for the full-screen settings activity. -->
+    <style name="Theme.CameraUploader" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
     </style>
-    <style name="Theme.Transparent" parent="Theme.AppCompat.Light.NoActionBar">
+    <!-- Invisible theme for CameraBridgeActivity (starts the service and finishes). -->
+    <style name="Theme.Transparent" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowContentOverlay">@null</item>

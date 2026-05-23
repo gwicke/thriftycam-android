@@ -39,6 +39,7 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
         const val ACTION_CAPTURE          = "com.camerauploader.ACTION_CAPTURE"
         const val ACTION_SETTINGS_CHANGED = "com.camerauploader.ACTION_SETTINGS_CHANGED"
+        const val ACTION_PREVIEW_CAPTURE  = "com.camerauploader.ACTION_PREVIEW_CAPTURE"
     }
 
     // ── Threads ───────────────────────────────────────────────────────────────
@@ -47,6 +48,10 @@ class CameraUploaderService : Service(), LifecycleOwner {
 
     // ── Camera ───────────────────────────────────────────────────────────────
     private var cameraProvider: ProcessCameraProvider? = null
+
+    // Serializes capture cycles (scheduled + preview) that share the single
+    // cameraProvider, so a preview can't yank the camera from an in-flight capture.
+    @Volatile private var captureInProgress = false
 
     // ── Long-lived HTTP client ────────────────────────────────────────────────
     val httpClient: OkHttpClient = OkHttpClient.Builder()
@@ -115,13 +120,31 @@ class CameraUploaderService : Service(), LifecycleOwner {
             // AlarmScheduler.scheduleFirstCapture(); don't shoot immediately.
             return START_STICKY
         }
+        if (intent?.action == ACTION_PREVIEW_CAPTURE) {
+            postWorker(previewMode = true)
+            return START_NOT_STICKY  // never redeliver a preview after a kill
+        }
         postWorker()
         return START_STICKY
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
-    private fun postWorker() {
-        if (SettingsManager.isDayByDayMode(this)) {
+    private fun postWorker(previewMode: Boolean = false) {
+        if (captureInProgress) {
+            // A capture cycle is already running. Reject a concurrent preview so it
+            // doesn't unbind the camera mid-capture; let scheduled captures proceed
+            // (they only overlap transiently and the new cycle rebinds cleanly).
+            if (previewMode) {
+                Log.w(TAG, "Preview requested while capture in progress — rejecting")
+                deliverPreview(null)
+                return
+            }
+        }
+        captureInProgress = true
+
+        // Day-state roll only applies to the recording path; a preview must never
+        // mutate lastCaptureDate or reset the persistent AV1 encoder.
+        if (!previewMode && SettingsManager.isDayByDayMode(this)) {
             val today = LocalDate.now(ZoneId.systemDefault()).toString()
             if (lastCaptureDate.isNotEmpty() && lastCaptureDate != today) {
                 resetDayState()
@@ -133,7 +156,15 @@ class CameraUploaderService : Service(), LifecycleOwner {
             cameraProvider!!, lifecycleRegistry, this,
             this,
             this,
-        ) { s -> this.updateNotification(s) }.run()
+            { s -> this.updateNotification(s) },
+            previewMode = previewMode,
+            onCycleComplete = { captureInProgress = false },
+        ).run()
+    }
+
+    /** Hand a freshly-captured preview JPEG (or null on failure) to the settings UI. */
+    fun deliverPreview(jpeg: ByteArray?) {
+        PreviewBus.deliver(jpeg)
     }
 
     /** Called at each day boundary: resets directory and encoder state. */

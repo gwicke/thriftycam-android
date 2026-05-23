@@ -4,18 +4,26 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.util.Size
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.widget.*
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,6 +37,12 @@ class MainActivity : AppCompatActivity() {
     private var lonInput: EditText? = null
     private var pendingLocationFill = false
 
+    // ── Preview overlay state ──
+    private var rootFrame: FrameLayout? = null
+    private var previewOverlay: View? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var previewTimeout: Runnable? = null
+
     private val requiredPermissions: Array<String>
         get() {
             val perms = mutableListOf(Manifest.permission.CAMERA)
@@ -40,7 +54,24 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AlarmScheduler.cancel(this)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (previewOverlay != null) {
+                    cancelPreviewTimeout()
+                    PreviewBus.onResult = null
+                    dismissPreviewOverlay()
+                } else {
+                    finish()
+                }
+            }
+        })
         loadResolutionsAndShowDialog()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        PreviewBus.onResult = null
+        cancelPreviewTimeout()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -58,17 +89,21 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        val progress = AlertDialog.Builder(this)
-            .setMessage("Loading camera resolutions…")
-            .setCancelable(false)
-            .create()
-        progress.show()
+        setContentView(FrameLayout(this).apply {
+            addView(ProgressBar(this@MainActivity).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER
+                )
+            })
+        })
         Thread {
             val sizes    = ResolutionHelper.getSupportedSizes(applicationContext)
             val evRange  = ExposureHelper.getEvRange(applicationContext)
             val awbModes = ExposureHelper.getAvailableAwbModes(applicationContext)
             runOnUiThread {
-                progress.dismiss()
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 showSettingsDialog(sizes, evRange, awbModes)
             }
         }.start()
@@ -457,80 +492,111 @@ class MainActivity : AppCompatActivity() {
             addView(showPassCheck)
         }
 
-        AlertDialog.Builder(this)
-            .setTitle(if (isFirstRun) "Configure uploader" else "Settings")
-            .setView(ScrollView(this).apply { addView(container) })
-            .setCancelable(!isFirstRun)
-            .setPositiveButton("Save & Start") { _, _ ->
-                val url = urlInput.text.toString().trim()
-                val intervalSecs = intervalInput.text.toString().trim().toIntOrNull() ?: 0
-
+        // Validate (only when starting a recording) and persist all settings.
+        // requireRecordingConfig=false (Preview) skips the URL/interval/location
+        // checks so the camera can be previewed before a server is configured.
+        fun collectAndSaveSettings(requireRecordingConfig: Boolean): Boolean {
+            val url = urlInput.text.toString().trim()
+            val intervalSecs = intervalInput.text.toString().trim().toIntOrNull() ?: 0
+            if (requireRecordingConfig) {
                 if (url.isBlank() || !url.startsWith("http")) {
-                    toast("Please enter a valid URL starting with https://")
-                    showSettingsDialog(availableSizes, evRange); return@setPositiveButton
+                    toast("Please enter a valid URL starting with https://"); return false
                 }
                 if (intervalSecs < 1) {
-                    toast("Interval must be at least 1 second")
-                    showSettingsDialog(availableSizes, evRange); return@setPositiveButton
+                    toast("Interval must be at least 1 second"); return false
                 }
                 if (dayByDayCheck.isChecked && daylightCheck.isChecked) {
-                    val latVal = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
-                    val lonVal = lonInput?.text?.toString()?.trim()?.toDoubleOrNull()
-                    if (latVal == null || latVal !in -90.0..90.0 ||
-                        lonVal == null || lonVal !in -180.0..180.0) {
+                    val latV = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
+                    val lonV = lonInput?.text?.toString()?.trim()?.toDoubleOrNull()
+                    if (latV == null || latV !in -90.0..90.0 ||
+                        lonV == null || lonV !in -180.0..180.0) {
                         toast("Enter a valid latitude (−90..90) and longitude (−180..180) for daylight mode")
-                        showSettingsDialog(availableSizes, evRange); return@setPositiveButton
+                        return false
                     }
                 }
+            }
 
-                s.setUploadUrl(this, url)
-                s.setIntervalSeconds(this, intervalSecs)
-                s.setResolution(this, resEntries[resSpinner.selectedItemPosition].size)
-                s.setUploadMode(this, modeEntries[modeSpinner.selectedItemPosition].first)
-                s.setAfEnabled(this, afCheck.isChecked)
-                s.setFocusDistance(this, sliderToDiopters(focusDistSeek.progress))
-                val seek = evSeek
-                if (evRange != null && seek != null) {
-                    s.setEvCompensation(this, evRange.min + seek.progress)
-                }
-                val awbSpin = awbSpinner
-                if (awbModes.isNotEmpty() && awbSpin != null) {
-                    s.setAwbMode(this, awbModes[awbSpin.selectedItemPosition].id)
-                }
-                s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
-                s.setDayByDayMode(this, dayByDayCheck.isChecked)
-                s.setDailyDirMode(this, dailyDirCheck.isChecked)
-                s.setDaylightOnly(this, daylightCheck.isChecked)
-                val offset = daylightOffsetInput.text.toString().trim().toIntOrNull() ?: 0
-                s.setDaylightOffsetMinutes(this, offset)
-                val crf = av1CrfInput.text.toString().trim().toIntOrNull() ?: 37
-                s.setAv1Crf(this, crf)
-                val encMode = av1ModeInput.text.toString().trim().toIntOrNull() ?: 10
-                s.setAv1EncMode(this, encMode)
-                s.setAuthCredentials(
-                    this,
-                    userInput.text.toString().trim(),
-                    passInput.text.toString()
-                )
-                val latVal = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
-                val lonVal = lonInput?.text?.toString()?.trim()?.toDoubleOrNull()
-                if (latVal != null && lonVal != null) s.setLocation(this, latVal.toFloat(), lonVal.toFloat())
+            s.setUploadUrl(this, url)
+            s.setIntervalSeconds(this, intervalSecs)
+            s.setResolution(this, resEntries[resSpinner.selectedItemPosition].size)
+            s.setUploadMode(this, modeEntries[modeSpinner.selectedItemPosition].first)
+            s.setAfEnabled(this, afCheck.isChecked)
+            s.setFocusDistance(this, sliderToDiopters(focusDistSeek.progress))
+            val seek = evSeek
+            if (evRange != null && seek != null) {
+                s.setEvCompensation(this, evRange.min + seek.progress)
+            }
+            val awbSpin = awbSpinner
+            if (awbModes.isNotEmpty() && awbSpin != null) {
+                s.setAwbMode(this, awbModes[awbSpin.selectedItemPosition].id)
+            }
+            s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
+            s.setDayByDayMode(this, dayByDayCheck.isChecked)
+            s.setDailyDirMode(this, dailyDirCheck.isChecked)
+            s.setDaylightOnly(this, daylightCheck.isChecked)
+            val offset = daylightOffsetInput.text.toString().trim().toIntOrNull() ?: 0
+            s.setDaylightOffsetMinutes(this, offset)
+            val crf = av1CrfInput.text.toString().trim().toIntOrNull() ?: 37
+            s.setAv1Crf(this, crf)
+            val encMode = av1ModeInput.text.toString().trim().toIntOrNull() ?: 10
+            s.setAv1EncMode(this, encMode)
+            s.setAuthCredentials(
+                this,
+                userInput.text.toString().trim(),
+                passInput.text.toString()
+            )
+            val latVal = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
+            val lonVal = lonInput?.text?.toString()?.trim()?.toDoubleOrNull()
+            if (latVal != null && lonVal != null) s.setLocation(this, latVal.toFloat(), lonVal.toFloat())
+            return true
+        }
 
-                proceedAfterSettingsSaved()
-            }
-            .apply {
-                if (!isFirstRun)
-                    setNegativeButton("Cancel") { _, _ -> finish() }
-            }
-            .setOnCancelListener { finish() }
-            .show()
-            .also { dialog ->
-                dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-                dialog.window?.setLayout(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT
-                )
-            }
+        // ── Assemble the full-screen layout ──
+        val titleView = TextView(this).apply {
+            text = if (isFirstRun) "Configure uploader" else "Settings"
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            textSize = 20f
+            setPadding(pad, pad, pad, halfPad)
+        }
+
+        fun barButton(label: String, onClick: () -> Unit) = Button(this).apply {
+            text = label
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            )
+            setOnClickListener { onClick() }
+        }
+
+        val buttonBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(pad, halfPad, pad, halfPad)
+            if (!isFirstRun) addView(barButton("Cancel") { finish() })
+            addView(barButton("Preview") { if (collectAndSaveSettings(false)) startPreviewCapture() })
+            addView(barButton("Save & Start") { if (collectAndSaveSettings(true)) proceedAfterSettingsSaved() })
+        }
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+            )
+            addView(container)
+        }
+
+        val formColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            addView(titleView)
+            addView(scroll)
+            addView(buttonBar)
+        }
+
+        previewOverlay = null
+        cancelPreviewTimeout()
+        val root = FrameLayout(this).apply { addView(formColumn) }
+        rootFrame = root
+        setContentView(root)
     }
 
     private fun proceedAfterSettingsSaved() {
@@ -547,6 +613,128 @@ class MainActivity : AppCompatActivity() {
         } else {
             ActivityCompat.requestPermissions(this, requiredPermissions, REQUEST_PERMISSIONS)
         }
+    }
+
+    // ── Preview capture ─────────────────────────────────────────────────────
+
+    private fun startPreviewCapture() {
+        showCapturingOverlay()
+        PreviewBus.onResult = { jpeg -> mainHandler.post { onPreviewResult(jpeg) } }
+        armPreviewTimeout()
+        val intent = Intent(this, CameraUploaderService::class.java).apply {
+            action = CameraUploaderService.ACTION_PREVIEW_CAPTURE
+        }
+        startForegroundService(intent)
+    }
+
+    private fun armPreviewTimeout() {
+        cancelPreviewTimeout()
+        previewTimeout = Runnable {
+            PreviewBus.onResult = null
+            dismissPreviewOverlay()
+            toast("Preview timed out (too dark or camera busy)")
+        }.also { mainHandler.postDelayed(it, 12_000) }
+    }
+
+    private fun cancelPreviewTimeout() {
+        previewTimeout?.let { mainHandler.removeCallbacks(it) }
+        previewTimeout = null
+    }
+
+    private fun onPreviewResult(jpeg: ByteArray?) {
+        if (isFinishing || isDestroyed) return
+        cancelPreviewTimeout()
+        if (jpeg == null) {
+            dismissPreviewOverlay()
+            toast("Preview capture failed")
+            return
+        }
+        Thread {
+            val bmp = runCatching { decodeDownsampled(jpeg) }.getOrNull()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (bmp == null) {
+                    dismissPreviewOverlay()
+                    toast("Could not decode preview image")
+                } else {
+                    showImageOverlay(bmp)
+                }
+            }
+        }.start()
+    }
+
+    /** Decode the captured JPEG downsampled to roughly the screen size to avoid OOM. */
+    private fun decodeDownsampled(jpeg: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+        val dm = resources.displayMetrics
+        val reqW = dm.widthPixels.coerceAtLeast(1)
+        val reqH = dm.heightPixels.coerceAtLeast(1)
+        var sample = 1
+        while (bounds.outWidth > 0 && bounds.outHeight > 0 &&
+            bounds.outWidth / (sample * 2) >= reqW && bounds.outHeight / (sample * 2) >= reqH
+        ) {
+            sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)
+    }
+
+    private fun showCapturingOverlay() {
+        val root = rootFrame ?: return
+        dismissPreviewOverlay()
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(0xCC000000.toInt())
+            isClickable = true  // swallow touches to the form behind
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER
+                )
+                addView(ProgressBar(this@MainActivity))
+                addView(TextView(this@MainActivity).apply {
+                    text = "Capturing…"
+                    setPadding(0, dpToPx(8), 0, 0)
+                })
+            })
+        }
+        root.addView(overlay)
+        previewOverlay = overlay
+    }
+
+    private fun showImageOverlay(bitmap: Bitmap) {
+        val root = rootFrame ?: return
+        dismissPreviewOverlay()
+        val iv = ImageView(this).apply {
+            setBackgroundColor(0xFF000000.toInt())
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setImageBitmap(bitmap)
+            isClickable = true
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setOnClickListener { dismissPreviewOverlay() }
+        }
+        root.addView(iv)
+        previewOverlay = iv
+        WindowCompat.getInsetsController(window, iv).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    private fun dismissPreviewOverlay() {
+        val overlay = previewOverlay ?: return
+        rootFrame?.removeView(overlay)
+        previewOverlay = null
+        WindowCompat.getInsetsController(window, window.decorView)
+            .show(WindowInsetsCompat.Type.systemBars())
     }
 
     // ── Permission result ─────────────────────────────────────────────────────

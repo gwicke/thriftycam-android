@@ -30,6 +30,8 @@ class CameraUploaderWorker(
     val applicationContext: android.content.Context,
     val service: CameraUploaderService,
     val updateNotification: (String) -> Unit,
+    private val previewMode: Boolean = false,
+    private val onCycleComplete: () -> Unit = {},
 ) {
 
     // ── Preflight state machine constants ────────────────────────────────────
@@ -50,6 +52,11 @@ class CameraUploaderWorker(
 
     private val uploadMode: SettingsManager.UploadMode
         get() = SettingsManager.getUploadMode(applicationContext)
+
+    // Preview always captures a JPEG (trivially decodable, never touches the AV1
+    // encoder), regardless of the configured upload mode.
+    private val effectiveMode: SettingsManager.UploadMode
+        get() = if (previewMode) SettingsManager.UploadMode.JPEG else uploadMode
 
     // ─────────────────────────────────────────────────────────────────────────
     // Outer cycle
@@ -125,7 +132,7 @@ class CameraUploaderWorker(
         triggerPrecapture(Camera2Interop.Extender(previewBuilder))
         apply3A(Camera2Interop.Extender(captureBuilder))
 
-        val secondaryUseCase: androidx.camera.core.UseCase = when (uploadMode) {
+        val secondaryUseCase: androidx.camera.core.UseCase = when (effectiveMode) {
             SettingsManager.UploadMode.JPEG -> {
                 imageCapture = captureBuilder.setJpegQuality(85).build()
                 imageCapture
@@ -148,6 +155,7 @@ class CameraUploaderWorker(
         } catch (e: Exception) {
             Log.e(TAG, "Camera bind failed", e)
             shutdownCamera()
+            if (previewMode) service.deliverPreview(null)
         }
     }
 
@@ -195,9 +203,11 @@ class CameraUploaderWorker(
             captureState.set(State.PICTURE_TAKEN)
             val isTooDark = iso != null && iso > 1600
                 && exposureTimeNs != null && exposureTimeNs > 33_333_333
-            if (isTooDark or (aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED)) {
+            // Preview must always produce an image; only the scheduled path bails on dark scenes.
+            if (!previewMode && (isTooDark or (aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED))) {
                 updateNotification("Too dark! (iso=$iso exposure=$exposureTimeNs)")
                 Log.d(TAG, "Too dark! (iso=$iso exposure=$exposureTimeNs ae=$aeState)")
+                onCycleComplete()  // terminal for this cycle — release the busy flag
                 return
             }
             shootImageAndShutdown(imageCapture)
@@ -227,12 +237,18 @@ class CameraUploaderWorker(
             ContextCompat.getMainExecutor(service),
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
-                    if (uploadMode == SettingsManager.UploadMode.JPEG) {
+                    if (previewMode) {
+                        // Preview: hand the JPEG to the UI overlay; never upload.
+                        val bytes = runCatching { imageProxyToBytes(image) }.getOrNull()
+                        image.close()
+                        shutdownCamera()
+                        service.deliverPreview(bytes)
+                    } else if (effectiveMode == SettingsManager.UploadMode.JPEG) {
                         val bytes = runCatching { imageProxyToBytes(image) }.getOrNull()
                         image.close()
                         shutdownCamera()
                         if (bytes != null) service.uploadJpeg(bytes)
-                    } else if (uploadMode == SettingsManager.UploadMode.AV1) {
+                    } else if (effectiveMode == SettingsManager.UploadMode.AV1) {
                         val frame = try {
                             yuvConverter.toI420(image)
                         } catch (t: Throwable) {
@@ -249,6 +265,7 @@ class CameraUploaderWorker(
                 override fun onError(exc: ImageCaptureException) {
                     Log.e(TAG, "takePicture failed: ${exc.message}", exc)
                     shutdownCamera()
+                    if (previewMode) service.deliverPreview(null)
                 }
             }
         )
@@ -260,6 +277,7 @@ class CameraUploaderWorker(
         runCatching { cameraProvider.unbindAll() }
         captureState.set(State.PREVIEW)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        onCycleComplete()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
