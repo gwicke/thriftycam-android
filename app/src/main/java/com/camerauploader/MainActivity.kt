@@ -516,7 +516,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (allPermissionsGranted()) {
             restartUploaderService()
-            toast("Uploader running ✓")
+            toast("Uploader running, first capture in 5s ✓")
             finish()
         } else {
             ActivityCompat.requestPermissions(this, requiredPermissions, REQUEST_PERMISSIONS)
@@ -548,7 +548,7 @@ class MainActivity : AppCompatActivity() {
             REQUEST_PERMISSIONS -> {
                 if (allPermissionsGranted()) {
                     restartUploaderService()
-                    toast("Uploader running ✓")
+                    toast("Uploader running, first capture in 5s ✓")
                 } else {
                     toast("Camera permission is required for the uploader to work.")
                 }
