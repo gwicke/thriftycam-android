@@ -2,6 +2,7 @@ package com.camerauploader
 
 import android.annotation.SuppressLint
 import android.graphics.ImageFormat
+import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
@@ -93,6 +94,7 @@ class CameraUploaderWorker(
         val focusDistance = SettingsManager.getFocusDistance(applicationContext)
 
         fun <T> apply3A(ext: Camera2Interop.Extender<T>) {
+            ext.setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
             if (afEnabled) {
                 ext.setCaptureRequestOption(
                     CaptureRequest.CONTROL_AF_MODE,
@@ -106,9 +108,15 @@ class CameraUploaderWorker(
             ext.setCaptureRequestOption(
                     CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                .setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT)
+                    CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+        }
+        fun <T> triggerPrecapture(ext: Camera2Interop.Extender<T>) {
+            ext.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
         }
         apply3A(Camera2Interop.Extender(previewBuilder))
+        triggerPrecapture(Camera2Interop.Extender(previewBuilder))
         apply3A(Camera2Interop.Extender(captureBuilder))
 
         val secondaryUseCase: androidx.camera.core.UseCase = when (uploadMode) {
