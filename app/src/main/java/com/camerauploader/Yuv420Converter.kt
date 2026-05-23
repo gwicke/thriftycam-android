@@ -37,7 +37,12 @@ object Yuv420Converter {
         val vPlaneBuffer = planes[2].buffer
 
         // Check if the planes are already backed by a contiguous buffer
-        if (planes[1].pixelStride == 1
+        if (planes[0].pixelStride == 1
+            && planes[0].rowStride == w
+            && planes[1].pixelStride == 1
+            && planes[1].rowStride == uvStride
+            && planes[2].pixelStride == 1
+            && planes[2].rowStride == uvStride
             && yPlaneBuffer.hasArray()
             && yPlaneBuffer.array().size == ySize + 2 * uvSize
             && uPlaneBuffer.hasArray()
@@ -58,10 +63,21 @@ object Yuv420Converter {
             outBuf = ByteBuffer.allocateDirect(ySize + 2 * uvSize)
         }
 
-        // ── Y plane: tight-pack into [0..ySize); always contiguous
-        outBuf.position(0)
-        yPlaneBuffer.position(0)
-        outBuf.put(yPlaneBuffer)
+        // ── Y plane: tight-pack into [0..ySize)
+        if (planes[0].pixelStride == 1 && planes[0].rowStride == w) {
+            // contiguous, bulk copy
+            outBuf.position(0)
+            yPlaneBuffer.position(0)
+            outBuf.put(yPlaneBuffer)
+        } else {
+            copyPlane(
+                src = yPlaneBuffer,
+                srcRowStride = planes[0].rowStride,
+                srcPixelStride = planes[0].pixelStride,
+                width = w, height = h,
+                dst = outBuf, dstOffset = 0, dstRowStride = yStride,
+            )
+        }
 
         // ── U plane ───────────────────────────────────────────────────────
         copyPlane(

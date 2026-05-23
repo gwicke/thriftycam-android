@@ -230,15 +230,16 @@ class CameraUploaderService : Service(), LifecycleOwner {
         }
 
         val timestamp = System.currentTimeMillis()
-        val duration  = timestamp - captureTime
+        val duration = timestamp - captureTime
 
-        val dirUrl = if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDailyDirMode(this)) {
-            val date = LocalDate.now(ZoneId.systemDefault()).toString()  // "2026-05-19"
-            ensureDayDirectory(baseUrl, date)
-            "${baseUrl.trimEnd('/')}/$date"
-        } else {
-            baseUrl.trimEnd('/')
-        }
+        val dirUrl =
+            if (SettingsManager.isDayByDayMode(this) && SettingsManager.isDailyDirMode(this)) {
+                val date = LocalDate.now(ZoneId.systemDefault()).toString()  // "2026-05-19"
+                ensureDayDirectory(baseUrl, date)
+                "${baseUrl.trimEnd('/')}/$date"
+            } else {
+                baseUrl.trimEnd('/')
+            }
 
         val bat = getBatteryLevel()
         val sensorData = buildString {
@@ -252,23 +253,50 @@ class CameraUploaderService : Service(), LifecycleOwner {
             .url("$dirUrl/$captureTime.$ext")
             .put(bytes.toRequestBody(mimeType.toMediaType()))
             .header("x-sensor-data", sensorData)
-            .also { SettingsManager.getBasicAuthHeader(this)?.let { h -> it.header("Authorization", h) } }
-            .build()
-        try {
-            httpClient.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    Log.i(TAG, "Upload OK: ${resp.code}")
-                    val nextMs = SettingsManager.getNextAlarmMs(this)
-                    val nextStr = if (nextMs > 0) "  Next: ${DateFormat.format("HH:mm:ss", nextMs)}" else ""
-                    updateNotification("Last: ${DateFormat.format("HH:mm:ss", timestamp)} ✓$nextStr")
-                } else {
-                    Log.w(TAG, "Upload failed: HTTP ${resp.code}")
-                    updateNotification("Upload failed (HTTP ${resp.code})")
-                }
+            .also {
+                SettingsManager.getBasicAuthHeader(this)?.let { h -> it.header("Authorization", h) }
             }
-        } catch (e: IOException) {
-            Log.e(TAG, "putImage IOException", e)
-            updateNotification("Upload error")
+            .build()
+        var retries = 10
+        var delay_ms = 100L
+        while (retries > 0) {
+            try {
+                httpClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        Log.i(TAG, "Upload OK: ${resp.code}")
+                        val nextMs = SettingsManager.getNextAlarmMs(this)
+                        val nextStr = if (nextMs > 0) "  Next: ${
+                            DateFormat.format(
+                                "HH:mm:ss",
+                                nextMs
+                            )
+                        }" else ""
+                        updateNotification(
+                            "Last: ${
+                                DateFormat.format(
+                                    "HH:mm:ss",
+                                    timestamp
+                                )
+                            } ✓$nextStr"
+                        )
+                        retries = -1
+                    } else {
+                        Log.w(TAG, "Upload failed: HTTP ${resp.code}")
+                        updateNotification("Upload failed (HTTP ${resp.code})")
+                    }
+                }
+            } catch (e: IOException) {
+                Log.e(TAG, "putImage IOException", e)
+                updateNotification("Upload error")
+            }
+            retries -= 1
+            if (retries == 0) {
+                // Restart the stream with a new keyframe, so we have no holes
+                resetDayState()
+            } else if (retries > 0) {
+                Thread.sleep(delay_ms)
+                delay_ms *= 2
+            }
         }
     }
 
