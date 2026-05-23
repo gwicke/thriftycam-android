@@ -166,6 +166,24 @@ object SettingsManager {
     fun hasLocation(context: Context): Boolean =
         !getLocationLat(context).isNaN()
 
+    // ── Camera focus ──────────────────────────────────────────────────────────
+
+    private const val KEY_AF_ENABLED     = "af_enabled"
+    private const val KEY_FOCUS_DISTANCE = "focus_distance"  // Camera2 diopters; 0.0 = infinity
+
+    fun isAfEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AF_ENABLED, true)
+
+    fun setAfEnabled(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_AF_ENABLED, v) }
+
+    /** Focus distance in Camera2 diopters (m⁻¹): 0.0 = infinity, higher = closer. */
+    fun getFocusDistance(context: Context): Float =
+        prefs(context).getFloat(KEY_FOCUS_DISTANCE, 0.0f)
+
+    fun setFocusDistance(context: Context, distance: Float) =
+        prefs(context).edit { putFloat(KEY_FOCUS_DISTANCE, distance.coerceAtLeast(0.0f)) }
+
     // ── AV1 encoding parameters ───────────────────────────────────────────────
 
     fun getAv1Crf(context: Context): Int =

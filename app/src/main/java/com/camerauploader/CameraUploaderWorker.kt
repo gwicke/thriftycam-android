@@ -92,6 +92,15 @@ class CameraUploaderWorker(
             .setFlashMode(ImageCapture.FLASH_MODE_OFF)
             .setTargetRotation(android.view.Surface.ROTATION_90)
             .setResolutionSelector(resolutionSelector)
+
+        val afEnabled = SettingsManager.isAfEnabled(applicationContext)
+        if (!afEnabled) {
+            val focusDistance = SettingsManager.getFocusDistance(applicationContext)
+            Camera2Interop.Extender(captureBuilder)
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                .setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
+        }
+
         val secondaryUseCase: androidx.camera.core.UseCase = when (uploadMode) {
             SettingsManager.UploadMode.JPEG -> {
                 imageCapture = captureBuilder.setJpegQuality(85).build()
@@ -148,7 +157,8 @@ class CameraUploaderWorker(
         val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
         val exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
 
-        val afReady = afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
+        val afReady = !SettingsManager.isAfEnabled(applicationContext)
+            || afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
             || afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
             || afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED
 
@@ -176,14 +186,17 @@ class CameraUploaderWorker(
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun triggerAfAeLock(camera: Camera) {
-        updateNotification("Locking AF + AE…")
-        Log.d(TAG, "State → WAITING_3A")
+        val afEnabled = SettingsManager.isAfEnabled(applicationContext)
+        val meteringFlags = (if (afEnabled) FocusMeteringAction.FLAG_AF else 0) or
+            FocusMeteringAction.FLAG_AWB or FocusMeteringAction.FLAG_AE
+        updateNotification(if (afEnabled) "Locking AF + AE…" else "Locking AE…")
+        Log.d(TAG, "State → WAITING_3A (af=$afEnabled)")
         captureState.set(State.WAITING_3A)
         stateEnteredAt = System.currentTimeMillis()
         camera.cameraControl.startFocusAndMetering(
             FocusMeteringAction.Builder(
                 SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(0.5f, 0.5f),
-                FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AWB or FocusMeteringAction.FLAG_AE
+                meteringFlags
             ).disableAutoCancel().build()
         )
     }

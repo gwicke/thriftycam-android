@@ -158,6 +158,55 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dpToPx(2), 0, 0)
         }
 
+        // ── Camera focus ──────────────────────────────────────────────────────
+        // Slider: progress MAX (right) = 0.0 diopters (infinity);
+        //         progress 0   (left)  = FOCUS_MAX_DIOPTERS (closest, ~5 cm).
+        val FOCUS_SEEK_MAX     = 200
+        val FOCUS_MAX_DIOPTERS = 20.0f
+        fun sliderToDiopters(p: Int)  = (1.0f - p.toFloat() / FOCUS_SEEK_MAX) * FOCUS_MAX_DIOPTERS
+        fun dioptToLabel(d: Float)    = if (d < 0.05f) "∞ (infinity)"
+                                        else "%.2f m  (%.0f cm)".format(1.0f / d, 100.0f / d)
+
+        val focusHeader = label("Camera focus")
+
+        val afCheck = CheckBox(this).apply {
+            text = "Use auto-focus (AF)"
+            isChecked = s.isAfEnabled(this@MainActivity)
+            setPadding(0, dpToPx(4), 0, dpToPx(4))
+        }
+
+        val savedFocusDist = s.getFocusDistance(this@MainActivity)
+        val savedFocusProgress = ((1.0f - savedFocusDist / FOCUS_MAX_DIOPTERS) * FOCUS_SEEK_MAX)
+            .toInt().coerceIn(0, FOCUS_SEEK_MAX)
+
+        val focusDistLabel = label("Focus distance (∞ at right end, closest at left end)").apply {
+            isEnabled = !afCheck.isChecked
+        }
+        val focusDistValue = TextView(this).apply {
+            text = dioptToLabel(savedFocusDist)
+            textSize = 12f
+            setPadding(0, dpToPx(2), 0, dpToPx(2))
+            isEnabled = !afCheck.isChecked
+        }
+        val focusDistSeek = SeekBar(this).apply {
+            max = FOCUS_SEEK_MAX
+            progress = savedFocusProgress
+            isEnabled = !afCheck.isChecked
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, p: Int, fromUser: Boolean) {
+                    focusDistValue.text = dioptToLabel(sliderToDiopters(p))
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) {}
+                override fun onStopTrackingTouch(bar: SeekBar) {}
+            })
+        }
+
+        afCheck.setOnCheckedChangeListener { _, checked ->
+            focusDistLabel.isEnabled = !checked
+            focusDistSeek.isEnabled  = !checked
+            focusDistValue.isEnabled = !checked
+        }
+
         // ── Day-by-day recording ──────────────────────────────────────────────
         // Top-level: resets the AV1 encoder at each local-timezone day boundary.
         val dayByDayHeader = label("Day-by-day recording")
@@ -315,6 +364,11 @@ class MainActivity : AppCompatActivity() {
             addView(modeLabel)
             addView(modeSpinner)
             addView(modeNote)
+            addView(focusHeader)
+            addView(afCheck)
+            addView(focusDistLabel)
+            addView(focusDistSeek)
+            addView(focusDistValue)
             addView(dayByDayHeader)
             addView(dayByDayCheck)
             addView(dailyDirCheck)
@@ -372,6 +426,8 @@ class MainActivity : AppCompatActivity() {
                 s.setIntervalSeconds(this, intervalSecs)
                 s.setResolution(this, resEntries[resSpinner.selectedItemPosition].size)
                 s.setUploadMode(this, modeEntries[modeSpinner.selectedItemPosition].first)
+                s.setAfEnabled(this, afCheck.isChecked)
+                s.setFocusDistance(this, sliderToDiopters(focusDistSeek.progress))
                 s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
                 s.setDayByDayMode(this, dayByDayCheck.isChecked)
                 s.setDailyDirMode(this, dailyDirCheck.isChecked)
