@@ -37,9 +37,11 @@ class CameraUploaderService : Service(), LifecycleOwner {
         private const val CHANNEL_ID = "camera_uploader_channel"
         private const val NOTIFICATION_ID = 1
 
-        const val ACTION_CAPTURE          = "com.camerauploader.ACTION_CAPTURE"
-        const val ACTION_SETTINGS_CHANGED = "com.camerauploader.ACTION_SETTINGS_CHANGED"
-        const val ACTION_PREVIEW_CAPTURE  = "com.camerauploader.ACTION_PREVIEW_CAPTURE"
+        const val ACTION_CAPTURE             = "com.camerauploader.ACTION_CAPTURE"
+        const val ACTION_SETTINGS_CHANGED   = "com.camerauploader.ACTION_SETTINGS_CHANGED"
+        const val ACTION_PREVIEW_CAPTURE    = "com.camerauploader.ACTION_PREVIEW_CAPTURE"
+        /** Lightweight action: push config.json to the server, nothing else. */
+        const val ACTION_PUSH_REMOTE_CONFIG = "com.camerauploader.PUSH_REMOTE_CONFIG"
     }
 
     // ── Threads ───────────────────────────────────────────────────────────────
@@ -116,12 +118,18 @@ class CameraUploaderService : Service(), LifecycleOwner {
         if (intent?.action == ACTION_SETTINGS_CHANGED) {
             resetDayState()
             lastCaptureDate = ""
-            // Push the new local config to the server so it becomes the latest.
+            // Config push is now triggered directly from collectAndSaveSettings()
+            // in MainActivity via ACTION_PUSH_REMOTE_CONFIG, covering both the
+            // "Save & Start" and "Preview" paths. Nothing extra needed here.
+            // First capture is handled by the 5-second alarm scheduled by
+            // AlarmScheduler.scheduleFirstCapture(); don't shoot immediately.
+            return START_STICKY
+        }
+        if (intent?.action == ACTION_PUSH_REMOTE_CONFIG) {
+            // Lightweight push: just PUT config.json, no alarm or state changes.
             if (SettingsManager.isRemoteConfigEnabled(this)) {
                 uploadExecutor.execute { saveRemoteConfig() }
             }
-            // First capture is handled by the 5-second alarm scheduled by
-            // AlarmScheduler.scheduleFirstCapture(); don't shoot immediately.
             return START_STICKY
         }
         if (intent?.action == ACTION_PREVIEW_CAPTURE) {

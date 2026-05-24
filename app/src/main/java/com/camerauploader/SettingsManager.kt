@@ -139,6 +139,21 @@ object SettingsManager {
     fun setDaylightOnly(context: Context, v: Boolean) =
         prefs(context).edit { putBoolean(KEY_DAYLIGHT_ONLY, v) }
 
+    // ── Low-light skip ────────────────────────────────────────────────────────
+
+    private const val KEY_SKIP_TOO_DARK = "skip_too_dark"
+
+    /**
+     * When true (default), scheduled captures are skipped when the scene is too
+     * dark (ISO > 1600 AND exposure > 33 ms, or AE reports FLASH_REQUIRED).
+     * Preview captures always shoot regardless of this setting.
+     */
+    fun isSkipTooDark(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SKIP_TOO_DARK, true)
+
+    fun setSkipTooDark(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_SKIP_TOO_DARK, v) }
+
     fun getDaylightOffsetMinutes(context: Context): Int =
         prefs(context).getInt(KEY_DAYLIGHT_OFFSET_MIN, 0)
 

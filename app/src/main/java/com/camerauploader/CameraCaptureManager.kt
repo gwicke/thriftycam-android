@@ -221,8 +221,11 @@ class CameraCaptureManager(
             captureState.set(State.PICTURE_TAKEN)
             val isTooDark = iso != null && iso > 1600
                 && exposureTimeNs != null && exposureTimeNs > 33_333_333
-            // Preview must always produce an image; only the scheduled path bails on dark scenes.
-            if (!previewMode && (isTooDark or (aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED))) {
+            // Preview always shoots. Scheduled captures skip when the scene is too
+            // dark, but only if the "skip too dark" preference is enabled.
+            val skipWhenDark = SettingsManager.isSkipTooDark(applicationContext)
+            if (!previewMode && skipWhenDark &&
+                    (isTooDark || aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED)) {
                 updateNotification("Too dark! (iso=$iso exposure=$exposureTimeNs)")
                 Log.d(TAG, "Too dark! (iso=$iso exposure=$exposureTimeNs ae=$aeState)")
                 onCycleComplete()  // terminal for this cycle — release the busy flag

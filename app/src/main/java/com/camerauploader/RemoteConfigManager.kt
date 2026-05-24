@@ -1,7 +1,10 @@
 package com.camerauploader
 
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.os.Build
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 
@@ -46,6 +49,7 @@ object RemoteConfigManager {
             val lon = s.getLocationLon(context)
             put("location_lat", if (lat.isNaN()) JSONObject.NULL else lat.toDouble())
             put("location_lon", if (lon.isNaN()) JSONObject.NULL else lon.toDouble())
+            put("skip_too_dark",             s.isSkipTooDark(context))
             put("af_enabled",                s.isAfEnabled(context))
             put("focus_distance",            s.getFocusDistance(context).toDouble())
             put("ev_compensation",           s.getEvCompensation(context))
@@ -58,8 +62,96 @@ object RemoteConfigManager {
             put("remote_config_enabled",     s.isRemoteConfigEnabled(context))
             put("remote_config_check_hours", s.getRemoteConfigCheckHours(context).toDouble())
             put(KEY_VERSION,                 s.getConfigVersion(context))
+
+            // ── Informational metadata (ignored on merge) ─────────────────────
+            // All values here are read-only descriptions; mergeFromJson() never
+            // touches the "info" key. Camera characteristic queries only read
+            // CameraCharacteristics — no camera session is opened.
+            val configuredCameraId = s.getCameraId(context)
+            put("info", buildInfoObject(context, configuredCameraId))
         }.toString(2)  // 2-space indent — human-editable on the server
     }
+
+    private fun buildInfoObject(context: Context, configuredCameraId: String?): JSONObject =
+        JSONObject().apply {
+            // Hardware
+            put("device_model",        Build.MODEL)
+            put("device_manufacturer", Build.MANUFACTURER)
+            put("android_version",     Build.VERSION.RELEASE)
+            put("android_api",         Build.VERSION.SDK_INT)
+
+            // Available cameras
+            val camsArr = JSONArray()
+            ExposureHelper.getAvailableCameras(context).forEach { cam ->
+                camsArr.put(JSONObject().apply {
+                    put("id",     cam.cameraId)
+                    put("facing", if (cam.facing == CameraCharacteristics.LENS_FACING_BACK)
+                                      "back" else "front")
+                    put("label",  cam.label)
+                })
+            }
+            put("cameras", camsArr)
+
+            // Currently configured camera — resolutions
+            val resSizes = ResolutionHelper.getSupportedSizes(context, configuredCameraId)
+            val resArr = JSONArray()
+            resSizes.forEach { sz -> resArr.put(ResolutionHelper.format(sz)) }
+            put("resolutions", resArr)
+
+            // Currently configured camera — AWB modes
+            val awbArr = JSONArray()
+            ExposureHelper.getAvailableAwbModes(context).forEach { m ->
+                awbArr.put(JSONObject().apply { put("id", m.id); put("label", m.label) })
+            }
+            put("awb_modes", awbArr)
+
+            // Currently configured camera — EV compensation range
+            ExposureHelper.getEvRange(context)?.let { ev ->
+                put("ev_compensation", JSONObject().apply {
+                    put("min",     ev.min)
+                    put("max",     ev.max)
+                    put("step_ev", ev.stepEv)
+                })
+            }
+
+            // Currently configured camera — zoom ratio range (Android 11+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                ExposureHelper.getZoomRatioRange(context, configuredCameraId)?.let { zr ->
+                    put("zoom_ratio", JSONObject().apply {
+                        put("min", zr.first.toDouble())
+                        put("max", zr.second.toDouble())
+                    })
+                }
+            }
+
+            // Static notes for non-boolean fields
+            put("interval_seconds",
+                JSONObject().apply { put("min", 1) })
+            put("focus_distance",
+                JSONObject().apply {
+                    put("note", "0.0 = infinity; 20.0 = closest (~5 cm). " +
+                                "Ignored when af_enabled = true")
+                })
+            put("av1_crf",
+                JSONObject().apply {
+                    put("min", 0); put("max", 63)
+                    put("note", "lower = better quality")
+                })
+            put("av1_enc_mode",
+                JSONObject().apply {
+                    put("min", 0); put("max", 10)
+                    put("note", "lower = slower/better quality")
+                })
+            put("remote_config_check_hours",
+                JSONObject().apply {
+                    put("min", 0.0)
+                    put("note", "0 = check every upload")
+                })
+            put("daylight_offset_minutes",
+                JSONObject().apply {
+                    put("note", "positive = wider window (start before sunrise, stop after sunset)")
+                })
+        }
 
     // ── Merge ─────────────────────────────────────────────────────────────────
 
@@ -72,6 +164,7 @@ object RemoteConfigManager {
      * merge the local `config_version` is set to the remote value.
      *
      * Returns the set of keys whose values actually changed (empty = no-op).
+     * The `info` key is intentionally ignored here.
      */
     fun mergeFromJson(context: Context, json: String): Set<String> {
         val s = SettingsManager
@@ -140,6 +233,11 @@ object RemoteConfigManager {
                     s.setLocation(context, lat, lon); changed += "location"
                 }
             }
+            if (obj.has("skip_too_dark"))
+                sync("skip_too_dark", s.isSkipTooDark(context),
+                    obj.getBoolean("skip_too_dark")) {
+                    s.setSkipTooDark(context, it)
+                }
             if (obj.has("af_enabled"))
                 sync("af_enabled", s.isAfEnabled(context), obj.getBoolean("af_enabled")) {
                     s.setAfEnabled(context, it)

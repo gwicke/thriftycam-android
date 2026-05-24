@@ -505,6 +505,14 @@ class MainActivity : AppCompatActivity() {
         }
         daylightCheck.setOnCheckedChangeListener { _, _ -> updateDaylightSubItems() }
 
+        // ── Low-light skip ────────────────────────────────────────────────────
+        // Independent of day-by-day mode; applies to all scheduled captures.
+        val skipDarkCheck = CheckBox(this).apply {
+            text = "Skip captures when too dark (ISO > 1600 and exposure > 33 ms)"
+            isChecked = s.isSkipTooDark(this@MainActivity)
+            setPadding(0, dpToPx(4), 0, dpToPx(8))
+        }
+
         // ── AV1 encoding parameters ───────────────────────────────────────────
         val av1Header = label("AV1 encoding parameters")
         val av1CrfLabel = label("CRF (0–63, lower = better quality; default 37)")
@@ -632,6 +640,7 @@ class MainActivity : AppCompatActivity() {
             addView(lonLabel)
             addView(lonInput!!)
             addView(useDeviceLocationBtn)
+            addView(skipDarkCheck)
             addView(av1Header)
             addView(av1CrfLabel)
             addView(av1CrfInput)
@@ -713,6 +722,7 @@ class MainActivity : AppCompatActivity() {
             s.setDaylightOnly(this, daylightCheck.isChecked)
             val offset = daylightOffsetInput.text.toString().trim().toIntOrNull() ?: 0
             s.setDaylightOffsetMinutes(this, offset)
+            s.setSkipTooDark(this, skipDarkCheck.isChecked)
             val crf = av1CrfInput.text.toString().trim().toIntOrNull() ?: 37
             s.setAv1Crf(this, crf)
             val encMode = av1ModeInput.text.toString().trim().toIntOrNull() ?: 10
@@ -730,6 +740,12 @@ class MainActivity : AppCompatActivity() {
                 remoteConfigIntervalInput.text.toString().trim().toFloatOrNull()?.coerceAtLeast(0f) ?: 0f)
             // Stamp a fresh version so this local edit wins over any older remote config.
             s.setConfigVersion(this, Instant.now().toString())
+            // Push config.json on every settings save (covers both Save & Start and Preview).
+            if (s.isRemoteConfigEnabled(this)) {
+                startForegroundService(Intent(this, CameraUploaderService::class.java).apply {
+                    action = CameraUploaderService.ACTION_PUSH_REMOTE_CONFIG
+                })
+            }
             return true
         }
 
