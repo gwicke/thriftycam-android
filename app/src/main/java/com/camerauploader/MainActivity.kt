@@ -741,7 +741,7 @@ class MainActivity : AppCompatActivity() {
             // Stamp a fresh version so this local edit wins over any older remote config.
             s.setConfigVersion(this, Instant.now().toString())
             // Push config.json on every settings save (covers both Save & Start and Preview).
-            if (s.isRemoteConfigEnabled(this)) {
+            if (s.isRemoteConfigEnabled(this) && requireRecordingConfig) {
                 startForegroundService(Intent(this, CameraUploaderService::class.java).apply {
                     action = CameraUploaderService.ACTION_PUSH_REMOTE_CONFIG
                 })
