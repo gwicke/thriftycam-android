@@ -4,6 +4,7 @@ import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
+import android.os.Build
 import android.util.Log
 
 /**
@@ -86,6 +87,35 @@ object ExposureHelper {
             EvRange(range.lower, range.upper, step.toDouble())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to read EV compensation range", e)
+            null
+        }
+    }
+
+    // ── Zoom ratio range ─────────────────────────────────────────────────────
+
+    /**
+     * Returns the [CONTROL_ZOOM_RATIO_RANGE] (min, max) for the specified camera, or
+     * null when:
+     * - the device runs Android < 11 (API 30), where the key does not exist, or
+     * - the camera service is unavailable.
+     *
+     * @param cameraId Camera2 ID of the camera to query; null falls back to the first
+     *                 back-facing camera.
+     */
+    fun getZoomRatioRange(context: Context, cameraId: String? = null): Pair<Float, Float>? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return null
+        return try {
+            val id = cameraId ?: cm.cameraIdList.firstOrNull { id ->
+                cm.getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            } ?: return null
+            val chars = cm.getCameraCharacteristics(id)
+            @Suppress("NewApi")  // guarded by SDK check above
+            val range = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) ?: return null
+            Pair(range.lower, range.upper)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read zoom ratio range", e)
             null
         }
     }

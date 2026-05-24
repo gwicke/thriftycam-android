@@ -106,13 +106,14 @@ class MainActivity : AppCompatActivity() {
                 ?: cameras.firstOrNull {
                     it.facing == CameraCharacteristics.LENS_FACING_BACK
                 }?.cameraId
-            val sizes    = ResolutionHelper.getSupportedSizes(
+            val sizes     = ResolutionHelper.getSupportedSizes(
                 applicationContext, cameraId = initialCameraId)
-            val evRange  = ExposureHelper.getEvRange(applicationContext)
-            val awbModes = ExposureHelper.getAvailableAwbModes(applicationContext)
+            val evRange   = ExposureHelper.getEvRange(applicationContext)
+            val awbModes  = ExposureHelper.getAvailableAwbModes(applicationContext)
+            val zoomRange = ExposureHelper.getZoomRatioRange(applicationContext, initialCameraId)
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                showSettingsDialog(cameras, sizes, evRange, awbModes)
+                showSettingsDialog(cameras, sizes, evRange, awbModes, zoomRange)
             }
         }.start()
     }
@@ -124,6 +125,7 @@ class MainActivity : AppCompatActivity() {
         availableSizes: List<Size>,
         evRange: ExposureHelper.EvRange?,
         awbModes: List<ExposureHelper.AwbMode> = emptyList(),
+        initialZoomRange: Pair<Float, Float>? = null,
     ) {
         val s = SettingsManager
         val isFirstRun = !s.isConfigured(this)
@@ -204,6 +206,77 @@ class MainActivity : AppCompatActivity() {
             setSelection(savedIndex)
         }
 
+        // ── Zoom ratio ────────────────────────────────────────────────────────────
+        // CONTROL_ZOOM_RATIO requires Android 11 (API 30). On older devices all
+        // zoom widgets are shown but permanently disabled (greyed out).
+        val ZOOM_STEPS = 200
+        val supportsZoom = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+
+        // Mutable: updated whenever the user switches cameras via the spinner.
+        var zoomRange: Pair<Float, Float>? = initialZoomRange
+
+        val zoomHeader = label("Zoom ratio")
+        val zoomNote = TextView(this).apply {
+            textSize = 11f
+            setTextColor(0xFF888888.toInt())
+            setPadding(0, dpToPx(2), 0, 0)
+        }
+        val zoomValue = TextView(this).apply {
+            textSize = 12f
+            setPadding(0, dpToPx(2), 0, dpToPx(2))
+        }
+        val zoomSeek = SeekBar(this).apply { max = ZOOM_STEPS }
+
+        /** Log-scale: equal slider distance for each doubling of zoom. */
+        fun progressToZoom(p: Int, min: Float, max: Float): Float {
+            val logMin = Math.log(min.coerceAtLeast(0.01).toDouble())
+            val logMax = Math.log(max.toDouble())
+            return Math.exp(logMin + (logMax - logMin) * p.toDouble() / ZOOM_STEPS)
+                .toFloat().coerceIn(min, max)
+        }
+        fun zoomToProgress(ratio: Float, min: Float, max: Float): Int {
+            val logMin = Math.log(min.coerceAtLeast(0.01).toDouble())
+            val logMax = Math.log(max.toDouble())
+            val logR   = Math.log(ratio.coerceIn(min, max).toDouble())
+            return ((logR - logMin) / (logMax - logMin) * ZOOM_STEPS)
+                .toInt().coerceIn(0, ZOOM_STEPS)
+        }
+
+        fun applyZoomRange(range: Pair<Float, Float>?) {
+            zoomRange = range
+            when {
+                !supportsZoom -> {
+                    zoomSeek.isEnabled  = false
+                    zoomValue.text      = "1.00×"
+                    zoomNote.text       = "Requires Android 11 or newer"
+                }
+                range == null -> {
+                    zoomSeek.isEnabled  = false
+                    zoomValue.text      = "1.00×"
+                    zoomNote.text       = "Not supported by this camera"
+                }
+                else -> {
+                    val savedRatio = SettingsManager.getZoomRatio(this)
+                        .coerceIn(range.first, range.second)
+                    val initP = zoomToProgress(savedRatio, range.first, range.second)
+                    zoomSeek.isEnabled = true
+                    zoomSeek.progress  = initP   // triggers onProgressChanged → reads updated zoomRange
+                    zoomNote.text      = "Range: %.2f× – %.2f×".format(range.first, range.second)
+                }
+            }
+        }
+
+        zoomSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar, p: Int, fromUser: Boolean) {
+                val r = zoomRange ?: return
+                zoomValue.text = "%.2f×".format(progressToZoom(p, r.first, r.second))
+            }
+            override fun onStartTrackingTouch(bar: SeekBar) {}
+            override fun onStopTrackingTouch(bar: SeekBar) {}
+        })
+
+        applyZoomRange(initialZoomRange)
+
         // Reload the resolution list whenever the user picks a different camera.
         cameraSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(p: AdapterView<*>?) {}
@@ -213,9 +286,11 @@ class MainActivity : AppCompatActivity() {
                 if (newId == resCurrentCameraId) return  // suppress initial callback
                 resCurrentCameraId = newId
                 resSpinner.isEnabled = false
+                if (supportsZoom) zoomSeek.isEnabled = false  // disable while reloading
                 Thread {
-                    val newSizes = ResolutionHelper.getSupportedSizes(
+                    val newSizes     = ResolutionHelper.getSupportedSizes(
                         applicationContext, cameraId = newId)
+                    val newZoomRange = ExposureHelper.getZoomRatioRange(applicationContext, newId)
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         resEntries.clear()
@@ -233,6 +308,7 @@ class MainActivity : AppCompatActivity() {
                                     newSizes[i].penalty(stored) } ?: 0)
                                else 0
                         resSpinner.setSelection(bestIdx.coerceIn(0, resEntries.lastIndex))
+                        applyZoomRange(newZoomRange)
                     }
                 }.start()
             }
@@ -540,6 +616,10 @@ class MainActivity : AppCompatActivity() {
             evSeek?.let   { addView(it) }
             evValue?.let  { addView(it) }
             awbSpinner?.let { addView(label("White balance")); addView(it) }
+            addView(zoomHeader)
+            addView(zoomSeek)
+            addView(zoomValue)
+            addView(zoomNote)
             addView(dayByDayHeader)
             addView(dayByDayCheck)
             addView(dailyDirCheck)
@@ -606,6 +686,12 @@ class MainActivity : AppCompatActivity() {
             val awbSpin = awbSpinner
             if (awbModes.isNotEmpty() && awbSpin != null) {
                 s.setAwbMode(this, awbModes[awbSpin.selectedItemPosition].id)
+            }
+            val zr = zoomRange
+            if (supportsZoom && zr != null) {
+                s.setZoomRatio(this, progressToZoom(zoomSeek.progress, zr.first, zr.second))
+            } else if (!supportsZoom) {
+                s.setZoomRatio(this, 1.0f)  // reset to neutral on devices that can't use it
             }
             s.setRecordingEnabled(this, recordingEnabledCheck.isChecked)
             s.setDayByDayMode(this, dayByDayCheck.isChecked)

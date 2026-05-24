@@ -206,6 +206,18 @@ object SettingsManager {
     fun setAwbMode(context: Context, mode: Int) =
         prefs(context).edit { putInt(KEY_AWB_MODE, mode) }
 
+    // ── Zoom ratio ────────────────────────────────────────────────────────────
+    // Camera2 CONTROL_ZOOM_RATIO, added in Android 11 (API 30). 1.0 = no zoom.
+
+    private const val KEY_ZOOM_RATIO = "zoom_ratio"
+
+    /** Camera2 zoom ratio (CONTROL_ZOOM_RATIO). Default 1.0 = no zoom. */
+    fun getZoomRatio(context: Context): Float =
+        prefs(context).getFloat(KEY_ZOOM_RATIO, 1.0f)
+
+    fun setZoomRatio(context: Context, ratio: Float) =
+        prefs(context).edit { putFloat(KEY_ZOOM_RATIO, ratio.coerceAtLeast(0f)) }
+
     // ── Camera selector ───────────────────────────────────────────────────────
 
     private const val KEY_CAMERA_ID = "camera_id"   // null = DEFAULT_BACK_CAMERA

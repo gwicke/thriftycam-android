@@ -103,6 +103,7 @@ class CameraUploaderWorker(
         val focusDistance = SettingsManager.getFocusDistance(applicationContext)
         val evComp        = SettingsManager.getEvCompensation(applicationContext)
         val awbMode       = SettingsManager.getAwbMode(applicationContext)
+        val zoomRatio     = SettingsManager.getZoomRatio(applicationContext)
 
         fun <T> apply3A(ext: Camera2Interop.Extender<T>) {
             ext.setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
@@ -123,6 +124,11 @@ class CameraUploaderWorker(
             if (evComp != 0) {
                 ext.setCaptureRequestOption(
                     CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, evComp)
+            }
+            // CONTROL_ZOOM_RATIO added in API 30 (Android 11).
+            if (Build.VERSION.SDK_INT >= 30 && zoomRatio != 1.0f) {
+                @Suppress("NewApi")
+                ext.setCaptureRequestOption(CaptureRequest.CONTROL_ZOOM_RATIO, zoomRatio)
             }
         }
         fun <T> triggerPrecapture(ext: Camera2Interop.Extender<T>) {
