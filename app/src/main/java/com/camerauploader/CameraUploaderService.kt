@@ -162,7 +162,7 @@ class CameraUploaderService : Service(), LifecycleOwner {
             lastCaptureDate = today
         }
 
-        CameraUploaderWorker(
+        CameraCaptureManager(
             cameraProvider!!, lifecycleRegistry, this,
             this,
             this,

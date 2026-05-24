@@ -9,7 +9,7 @@ import android.util.Log
 
 /**
  * Fires on device boot and re-arms the AlarmManager chain, which in turn
- * starts [CameraUploaderWorker] for each capture.
+ * starts [CameraCaptureManager] for each capture.
  *
  * AlarmManager alarms do NOT survive a reboot, so this receiver is the only
  * mechanism that re-establishes the schedule after the device powers on.

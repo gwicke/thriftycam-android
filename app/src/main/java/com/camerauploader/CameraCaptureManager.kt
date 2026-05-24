@@ -25,7 +25,7 @@ import androidx.lifecycle.LifecycleRegistry
 import java.util.concurrent.atomic.AtomicInteger
 
 @ExperimentalCamera2Interop
-class CameraUploaderWorker(
+class CameraCaptureManager(
     val cameraProvider: ProcessCameraProvider,
     val lifecycleRegistry: LifecycleRegistry,
     val lifeOwner: LifecycleOwner,
