@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.util.Size
+import java.time.Instant
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -552,6 +553,33 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dpToPx(2), 0, 0)
         }
 
+        // ── Remote config ─────────────────────────────────────────────────────
+        // Saves config.json (no credentials) to the upload directory and
+        // periodically re-reads it, merging in remotely-edited settings.
+        val remoteConfigHeader = label("Remote config")
+        val remoteConfigCheck = CheckBox(this).apply {
+            text = "Enable remote config (sync via config.json in upload directory)"
+            isChecked = s.isRemoteConfigEnabled(this@MainActivity)
+        }
+        val remoteConfigIntervalLabel = label("Config check interval (hours, 0 = every upload)").apply {
+            isEnabled = remoteConfigCheck.isChecked
+        }
+        val remoteConfigIntervalInput = editText(
+            value     = "%.2f".format(s.getRemoteConfigCheckHours(this)).trimEnd('0').trimEnd('.'),
+            hint      = "0",
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        ).apply { isEnabled = remoteConfigCheck.isChecked }
+        val remoteConfigNote = TextView(this).apply {
+            text = "Credentials are never written to or read from the remote config."
+            textSize = 11f
+            setTextColor(0xFF888888.toInt())
+            setPadding(0, dpToPx(2), 0, 0)
+        }
+        remoteConfigCheck.setOnCheckedChangeListener { _, checked ->
+            remoteConfigIntervalLabel.isEnabled = checked
+            remoteConfigIntervalInput.isEnabled = checked
+        }
+
         // ── Basic Auth ──
         val authHeader = TextView(this).apply {
             text = "Basic Auth (optional)"
@@ -638,6 +666,11 @@ class MainActivity : AppCompatActivity() {
             addView(av1ModeLabel)
             addView(av1ModeInput)
             addView(av1Note)
+            addView(remoteConfigHeader)
+            addView(remoteConfigCheck)
+            addView(remoteConfigIntervalLabel)
+            addView(remoteConfigIntervalInput)
+            addView(remoteConfigNote)
             addView(authHeader)
             addView(authSubtitle)
             addView(userLabel)
@@ -670,6 +703,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+
+            // If the upload URL changed, drop the cached If-Modified-Since so the
+            // new server gets a full first-check rather than a stale conditional GET.
+            if (url != s.getUploadUrl(this)) s.clearRemoteConfigCache(this)
 
             s.setUploadUrl(this, url)
             s.setIntervalSeconds(this, intervalSecs)
@@ -711,6 +748,11 @@ class MainActivity : AppCompatActivity() {
             val latVal = latInput?.text?.toString()?.trim()?.toDoubleOrNull()
             val lonVal = lonInput?.text?.toString()?.trim()?.toDoubleOrNull()
             if (latVal != null && lonVal != null) s.setLocation(this, latVal.toFloat(), lonVal.toFloat())
+            s.setRemoteConfigEnabled(this, remoteConfigCheck.isChecked)
+            s.setRemoteConfigCheckHours(this,
+                remoteConfigIntervalInput.text.toString().trim().toFloatOrNull()?.coerceAtLeast(0f) ?: 0f)
+            // Stamp a fresh version so this local edit wins over any older remote config.
+            s.setConfigVersion(this, Instant.now().toString())
             return true
         }
 

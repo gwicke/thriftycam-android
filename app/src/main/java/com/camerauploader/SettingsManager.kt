@@ -234,6 +234,56 @@ object SettingsManager {
             if (id == null) remove(KEY_CAMERA_ID) else putString(KEY_CAMERA_ID, id)
         }
 
+    // ── Remote config ─────────────────────────────────────────────────────────
+
+    private const val KEY_REMOTE_CONFIG_ENABLED       = "remote_config_enabled"
+    private const val KEY_REMOTE_CONFIG_CHECK_HOURS   = "remote_config_check_hours"  // 0 = every upload
+    private const val KEY_REMOTE_CONFIG_LAST_CHECK_MS = "remote_config_last_check_ms"
+    private const val KEY_REMOTE_CONFIG_LAST_MODIFIED = "remote_config_last_modified" // HTTP date string
+
+    // Authoritative version: ISO-8601 UTC timestamp of the last local settings
+    // change (or the remote config_version after a merge, whichever is newer).
+    private const val KEY_CONFIG_VERSION = "config_version"
+
+    fun isRemoteConfigEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_REMOTE_CONFIG_ENABLED, false)
+
+    fun setRemoteConfigEnabled(context: Context, v: Boolean) =
+        prefs(context).edit { putBoolean(KEY_REMOTE_CONFIG_ENABLED, v) }
+
+    /** Minimum hours between remote-config checks; 0 = check on every upload. */
+    fun getRemoteConfigCheckHours(context: Context): Float =
+        prefs(context).getFloat(KEY_REMOTE_CONFIG_CHECK_HOURS, 0f)
+
+    fun setRemoteConfigCheckHours(context: Context, hours: Float) =
+        prefs(context).edit { putFloat(KEY_REMOTE_CONFIG_CHECK_HOURS, hours.coerceAtLeast(0f)) }
+
+    fun getRemoteConfigLastCheckMs(context: Context): Long =
+        prefs(context).getLong(KEY_REMOTE_CONFIG_LAST_CHECK_MS, 0L)
+
+    fun setRemoteConfigLastCheckMs(context: Context, ms: Long) =
+        prefs(context).edit { putLong(KEY_REMOTE_CONFIG_LAST_CHECK_MS, ms) }
+
+    fun getRemoteConfigLastModified(context: Context): String =
+        prefs(context).getString(KEY_REMOTE_CONFIG_LAST_MODIFIED, "") ?: ""
+
+    fun setRemoteConfigLastModified(context: Context, value: String) =
+        prefs(context).edit { putString(KEY_REMOTE_CONFIG_LAST_MODIFIED, value) }
+
+    /** ISO-8601 UTC timestamp of the last local change / accepted remote merge. */
+    fun getConfigVersion(context: Context): String =
+        prefs(context).getString(KEY_CONFIG_VERSION, "") ?: ""
+
+    fun setConfigVersion(context: Context, iso: String) =
+        prefs(context).edit { putString(KEY_CONFIG_VERSION, iso) }
+
+    /** Clear cached check-time and last-modified (call after a PUT or URL change). */
+    fun clearRemoteConfigCache(context: Context) =
+        prefs(context).edit {
+            putLong(KEY_REMOTE_CONFIG_LAST_CHECK_MS, 0L)
+            putString(KEY_REMOTE_CONFIG_LAST_MODIFIED, "")
+        }
+
     // ── AV1 encoding parameters ───────────────────────────────────────────────
 
     fun getAv1Crf(context: Context): Int =

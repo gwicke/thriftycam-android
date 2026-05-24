@@ -116,6 +116,10 @@ class CameraUploaderService : Service(), LifecycleOwner {
         if (intent?.action == ACTION_SETTINGS_CHANGED) {
             resetDayState()
             lastCaptureDate = ""
+            // Push the new local config to the server so it becomes the latest.
+            if (SettingsManager.isRemoteConfigEnabled(this)) {
+                uploadExecutor.execute { saveRemoteConfig() }
+            }
             // First capture is handled by the 5-second alarm scheduled by
             // AlarmScheduler.scheduleFirstCapture(); don't shoot immediately.
             return START_STICKY
@@ -123,6 +127,12 @@ class CameraUploaderService : Service(), LifecycleOwner {
         if (intent?.action == ACTION_PREVIEW_CAPTURE) {
             postWorker(previewMode = true)
             return START_NOT_STICKY  // never redeliver a preview after a kill
+        }
+        // Piggy-back a remote-config check on this wake-up. Runs on the single
+        // upload thread before this cycle's image upload is queued, so any merged
+        // setting takes effect for the upload that follows.
+        if (shouldCheckRemoteConfig()) {
+            uploadExecutor.execute { checkRemoteConfig() }
         }
         postWorker()
         return START_STICKY
@@ -369,6 +379,93 @@ class CameraUploaderService : Service(), LifecycleOwner {
             val level = it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
             val scale = it.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
             level.toFloat() * 100f / scale.toFloat()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Remote config (config.json in the upload directory)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Whether this wake-up should fetch the remote config (honours the check interval). */
+    private fun shouldCheckRemoteConfig(): Boolean {
+        if (!SettingsManager.isRemoteConfigEnabled(this)) return false
+        val checkHours = SettingsManager.getRemoteConfigCheckHours(this)
+        if (checkHours <= 0f) return true  // every upload
+        val sinceMs = System.currentTimeMillis() - SettingsManager.getRemoteConfigLastCheckMs(this)
+        return sinceMs >= (checkHours * 3_600_000).toLong()
+    }
+
+    /** PUT the local (non-credential) config to config.json. Runs on [uploadExecutor]. */
+    private fun saveRemoteConfig() {
+        val baseUrl = SettingsManager.getUploadUrl(this)
+        if (baseUrl.isBlank()) return
+        val json = RemoteConfigManager.toJson(this)
+        val req = Request.Builder()
+            .url(RemoteConfigManager.configUrl(baseUrl))
+            .put(json.toByteArray(Charsets.UTF_8).toRequestBody("application/json".toMediaType()))
+            .also { SettingsManager.getBasicAuthHeader(this)?.let { h -> it.header("Authorization", h) } }
+            .build()
+        try {
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    // Force the next check to GET unconditionally and learn the real
+                    // Last-Modified, since most servers omit it on a PUT response.
+                    SettingsManager.clearRemoteConfigCache(this)
+                    Log.d(TAG, "Remote config saved (HTTP ${resp.code})")
+                } else {
+                    Log.w(TAG, "Remote config PUT failed: HTTP ${resp.code}")
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "saveRemoteConfig failed", e)
+        }
+    }
+
+    /**
+     * Conditionally GET config.json. The If-Modified-Since header is only a
+     * transport optimization; whether to apply the config is decided by the
+     * config_version comparison inside [RemoteConfigManager.mergeFromJson].
+     * Runs on [uploadExecutor].
+     */
+    private fun checkRemoteConfig() {
+        val baseUrl = SettingsManager.getUploadUrl(this)
+        if (baseUrl.isBlank()) return
+        SettingsManager.setRemoteConfigLastCheckMs(this, System.currentTimeMillis())
+        val lastMod = SettingsManager.getRemoteConfigLastModified(this)
+        val req = Request.Builder()
+            .url(RemoteConfigManager.configUrl(baseUrl))
+            .also {
+                SettingsManager.getBasicAuthHeader(this)?.let { h -> it.header("Authorization", h) }
+                if (lastMod.isNotBlank()) it.header("If-Modified-Since", lastMod)
+            }
+            .build()
+        try {
+            httpClient.newCall(req).execute().use { resp ->
+                when {
+                    resp.code == 304 -> Log.d(TAG, "Remote config unchanged (304)")
+                    !resp.isSuccessful -> Log.w(TAG, "Remote config GET failed: HTTP ${resp.code}")
+                    else -> {
+                        val body = resp.body?.string() ?: return
+                        resp.header("Last-Modified")?.takeIf { it.isNotBlank() }?.let {
+                            SettingsManager.setRemoteConfigLastModified(this, it)
+                        }
+                        val changed = RemoteConfigManager.mergeFromJson(this, body)
+                        if (changed.isNotEmpty()) {
+                            Log.i(TAG, "Remote config applied: $changed")
+                            updateNotification("Remote config updated (${changed.size} field${if (changed.size == 1) "" else "s"})")
+                            if ("interval_seconds" in changed || "recording_enabled" in changed) {
+                                if (SettingsManager.isRecordingEnabled(this)) {
+                                    AlarmScheduler.scheduleNext(this)
+                                } else {
+                                    AlarmScheduler.cancel(this)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "checkRemoteConfig failed", e)
         }
     }
 
