@@ -449,23 +449,26 @@ class CameraUploaderService : Service(), LifecycleOwner {
                         resp.header("Last-Modified")?.takeIf { it.isNotBlank() }?.let {
                             SettingsManager.setRemoteConfigLastModified(this, it)
                         }
-                        val changed = RemoteConfigManager.mergeFromJson(this, body)
-                        if (changed.isNotEmpty()) {
-                            Log.i(TAG, "Remote config applied: $changed")
-                            updateNotification("Remote config updated (${changed.size} field${if (changed.size == 1) "" else "s"})")
-                            if ("interval_seconds" in changed || "recording_enabled" in changed) {
-                                if (SettingsManager.isRecordingEnabled(this)) {
-                                    AlarmScheduler.scheduleNext(this)
-                                } else {
-                                    AlarmScheduler.cancel(this)
-                                }
-                            }
-                        }
+                        applyMergedConfig(RemoteConfigManager.mergeFromJson(this, body))
                     }
                 }
             }
         } catch (e: IOException) {
             Log.e(TAG, "checkRemoteConfig failed", e)
+        }
+    }
+
+    /** React to a merged remote config: notify, and reschedule the alarm if timing changed. */
+    private fun applyMergedConfig(changed: Set<String>) {
+        if (changed.isEmpty()) return
+        Log.i(TAG, "Remote config applied: $changed")
+        updateNotification("Remote config updated (${changed.size} field${if (changed.size == 1) "" else "s"})")
+        if ("interval_seconds" in changed || "recording_enabled" in changed) {
+            if (SettingsManager.isRecordingEnabled(this)) {
+                AlarmScheduler.scheduleNext(this)
+            } else {
+                AlarmScheduler.cancel(this)
+            }
         }
     }
 
