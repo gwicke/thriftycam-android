@@ -126,14 +126,9 @@ class CameraUploaderService : Service(), LifecycleOwner {
             return START_STICKY
         }
         if (intent?.action == ACTION_PUSH_REMOTE_CONFIG) {
-            // Build JSON on the main thread (camera-characteristic queries require it),
-            // then hand the pre-built string to the executor for the blocking HTTP PUT.
+            // Lightweight push: just PUT config.json, no alarm or state changes.
             if (SettingsManager.isRemoteConfigEnabled(this)) {
-                val baseUrl = SettingsManager.getUploadUrl(this)
-                if (baseUrl.isNotBlank()) {
-                    val json = RemoteConfigManager.toJson(this)
-                    uploadExecutor.execute { saveRemoteConfig(baseUrl, json) }
-                }
+                uploadExecutor.execute { saveRemoteConfig() }
             }
             return START_STICKY
         }
@@ -408,11 +403,11 @@ class CameraUploaderService : Service(), LifecycleOwner {
         return sinceMs >= (checkHours * 3_600_000).toLong()
     }
 
-    /**
-     * PUT the pre-built [json] to config.json at [baseUrl]. Runs on [uploadExecutor].
-     * JSON is built on the main thread by the caller (camera-info queries require it).
-     */
-    private fun saveRemoteConfig(baseUrl: String, json: String) {
+    /** PUT the local (non-credential) config to config.json. Runs on [uploadExecutor]. */
+    private fun saveRemoteConfig() {
+        val baseUrl = SettingsManager.getUploadUrl(this)
+        if (baseUrl.isBlank()) return
+        val json = RemoteConfigManager.toJson(this)
         val req = Request.Builder()
             .url(RemoteConfigManager.configUrl(baseUrl))
             .put(json.toByteArray(Charsets.UTF_8).toRequestBody("application/json".toMediaType()))
