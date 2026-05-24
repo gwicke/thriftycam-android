@@ -229,13 +229,13 @@ class MainActivity : AppCompatActivity() {
 
         /** Log-scale: equal slider distance for each doubling of zoom. */
         fun progressToZoom(p: Int, min: Float, max: Float): Float {
-            val logMin = Math.log(min.coerceAtLeast(0.01).toDouble())
+            val logMin = Math.log(min.coerceAtLeast(0.01f).toDouble())
             val logMax = Math.log(max.toDouble())
             return Math.exp(logMin + (logMax - logMin) * p.toDouble() / ZOOM_STEPS)
                 .toFloat().coerceIn(min, max)
         }
         fun zoomToProgress(ratio: Float, min: Float, max: Float): Int {
-            val logMin = Math.log(min.coerceAtLeast(0.01).toDouble())
+            val logMin = Math.log(min.coerceAtLeast(0.01f).toDouble())
             val logMax = Math.log(max.toDouble())
             val logR   = Math.log(ratio.coerceIn(min, max).toDouble())
             return ((logR - logMin) / (logMax - logMin) * ZOOM_STEPS)
