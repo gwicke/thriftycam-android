@@ -3,9 +3,9 @@ package com.camerauploader
 import android.content.Context
 import android.util.Size
 import androidx.annotation.OptIn
-import androidx.camera.camera2.interop.Camera2CameraFilter
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.CameraFilter
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -52,10 +52,8 @@ object ResolutionHelper {
                     CameraSelector.DEFAULT_BACK_CAMERA
                 } else {
                     CameraSelector.Builder()
-                        .addCameraFilter(Camera2CameraFilter.createCameraFilter { cams ->
-                            cams.filterTo(mutableListOf()) {
-                                Camera2CameraInfo.from(it).cameraId == cameraId
-                            }
+                        .addCameraFilter(CameraFilter { infos ->
+                            infos.filter { Camera2CameraInfo.from(it).cameraId == cameraId }
                         })
                         .build()
                 }
