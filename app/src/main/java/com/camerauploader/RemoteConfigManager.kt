@@ -93,7 +93,7 @@ object RemoteConfigManager {
             put("cameras", camsArr)
 
             // Currently configured camera — resolutions
-            val resSizes = ResolutionHelper.getSupportedSizes(context, configuredCameraId)
+            val resSizes = ResolutionHelper.getSupportedSizes(context, cameraId = configuredCameraId)
             val resArr = JSONArray()
             resSizes.forEach { sz -> resArr.put(ResolutionHelper.format(sz)) }
             put("resolutions", resArr)
