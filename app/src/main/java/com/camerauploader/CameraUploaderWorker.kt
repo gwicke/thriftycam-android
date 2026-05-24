@@ -8,6 +8,8 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.os.Build
 import android.util.Log
+import androidx.camera.camera2.interop.Camera2CameraFilter
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
@@ -146,9 +148,21 @@ class CameraUploaderWorker(
         try {
             cameraProvider.unbindAll()
             lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+            val storedCameraId = SettingsManager.getCameraId(applicationContext)
+            val cameraSelector = if (storedCameraId.isNullOrBlank()) {
+                CameraSelector.DEFAULT_BACK_CAMERA
+            } else {
+                CameraSelector.Builder()
+                    .addCameraFilter(Camera2CameraFilter.createCameraFilter { cams ->
+                        cams.filterTo(mutableListOf()) {
+                            Camera2CameraInfo.from(it).cameraId == storedCameraId
+                        }
+                    })
+                    .build()
+            }
             cameraProvider.bindToLifecycle(
                 lifeOwner,
-                CameraSelector.DEFAULT_BACK_CAMERA,
+                cameraSelector,
                 preview, secondaryUseCase
             )
             beginConvergenceWatch()

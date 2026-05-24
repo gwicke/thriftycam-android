@@ -15,6 +15,38 @@ object ExposureHelper {
 
     private const val TAG = "ExposureHelper"
 
+    // ── Camera enumeration ────────────────────────────────────────────────────
+
+    /** A physical or logical camera exposed by CameraManager. */
+    data class CameraEntry(val cameraId: String, val facing: Int, val label: String)
+
+    /**
+     * Returns all cameras reported by [CameraManager], labelled by facing direction
+     * (Back / Front / External). The list order matches [CameraManager.getCameraIdList].
+     * Returns an empty list only when the camera service is unavailable.
+     */
+    fun getAvailableCameras(context: Context): List<CameraEntry> {
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            ?: return emptyList()
+        return try {
+            cm.cameraIdList.mapNotNull { id ->
+                val chars = cm.getCameraCharacteristics(id)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                    ?: return@mapNotNull null
+                val base = when (facing) {
+                    CameraCharacteristics.LENS_FACING_BACK     -> "Back"
+                    CameraCharacteristics.LENS_FACING_FRONT    -> "Front"
+                    CameraCharacteristics.LENS_FACING_EXTERNAL -> "External"
+                    else                                        -> "Camera"
+                }
+                CameraEntry(id, facing, "$base (id=$id)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enumerate cameras", e)
+            emptyList()
+        }
+    }
+
     // ── Shared: back-camera characteristics ──────────────────────────────────
 
     private fun getBackCameraChars(context: Context): CameraCharacteristics? {

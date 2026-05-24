@@ -3,6 +3,8 @@ package com.camerauploader
 import android.content.Context
 import android.util.Size
 import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2CameraFilter
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -23,11 +25,16 @@ import kotlin.math.ln
 object ResolutionHelper {
 
     /**
-     * Synchronously fetches supported resolutions for the back camera.
+     * Synchronously fetches supported JPEG resolutions for the given [cameraId]
+     * (or the default back-facing camera when [cameraId] is null/blank).
      * Returns an empty list if the camera is unavailable or the query times out.
      */
     @OptIn(ExperimentalCamera2Interop::class)
-    fun getSupportedSizes(context: Context, timeoutSeconds: Long = 5): List<Size> {
+    fun getSupportedSizes(
+        context: Context,
+        timeoutSeconds: Long = 5,
+        cameraId: String? = null,
+    ): List<Size> {
         val latch = CountDownLatch(1)
         var sizes: List<Size> = emptyList()
 
@@ -40,19 +47,31 @@ object ResolutionHelper {
                 // We use ResolutionStrategy to enumerate via CameraX's public surface API.
                 val imageCapture = ImageCapture.Builder().build()
 
+                // Build selector: use stored camera ID when provided, else default back.
+                val selector = if (cameraId.isNullOrBlank()) {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                } else {
+                    CameraSelector.Builder()
+                        .addCameraFilter(Camera2CameraFilter.createCameraFilter { cams ->
+                            cams.filterTo(mutableListOf()) {
+                                Camera2CameraInfo.from(it).cameraId == cameraId
+                            }
+                        })
+                        .build()
+                }
+
                 // Bind briefly just to read resolution data, then unbind immediately.
                 provider.unbindAll()
                 val camera = provider.bindToLifecycle(
                     // Use a no-op LifecycleOwner that is already in STARTED state.
                     NoOpLifecycleOwner(),
-                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    selector,
                     imageCapture
                 )
 
                 // CameraX exposes supported sizes through CameraInfo → CameraCharacteristics.
                 // The cleanest public API is via Camera2CameraInfo.
-                val camera2Info = androidx.camera.camera2.interop.Camera2CameraInfo
-                    .from(camera.cameraInfo)
+                val camera2Info = Camera2CameraInfo.from(camera.cameraInfo)
                 val chars = camera2Info.getCameraCharacteristic(
                     android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
                 )

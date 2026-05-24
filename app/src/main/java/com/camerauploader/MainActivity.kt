@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.hardware.camera2.CameraCharacteristics
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
@@ -99,12 +100,19 @@ class MainActivity : AppCompatActivity() {
             })
         })
         Thread {
-            val sizes    = ResolutionHelper.getSupportedSizes(applicationContext)
+            val cameras  = ExposureHelper.getAvailableCameras(applicationContext)
+            val storedId = SettingsManager.getCameraId(applicationContext)
+            val initialCameraId = storedId
+                ?: cameras.firstOrNull {
+                    it.facing == CameraCharacteristics.LENS_FACING_BACK
+                }?.cameraId
+            val sizes    = ResolutionHelper.getSupportedSizes(
+                applicationContext, cameraId = initialCameraId)
             val evRange  = ExposureHelper.getEvRange(applicationContext)
             val awbModes = ExposureHelper.getAvailableAwbModes(applicationContext)
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                showSettingsDialog(sizes, evRange, awbModes)
+                showSettingsDialog(cameras, sizes, evRange, awbModes)
             }
         }.start()
     }
@@ -112,6 +120,7 @@ class MainActivity : AppCompatActivity() {
     // ── Settings dialog ───────────────────────────────────────────────────────
 
     private fun showSettingsDialog(
+        cameras: List<ExposureHelper.CameraEntry> = emptyList(),
         availableSizes: List<Size>,
         evRange: ExposureHelper.EvRange?,
         awbModes: List<ExposureHelper.AwbMode> = emptyList(),
@@ -144,6 +153,35 @@ class MainActivity : AppCompatActivity() {
             inputType = InputType.TYPE_CLASS_NUMBER
         )
 
+        // ── Camera selector ──
+        // Fall back to a placeholder entry when camera enumeration was skipped
+        // (e.g. permission not yet granted).
+        val cameraEntries: List<ExposureHelper.CameraEntry> = cameras.ifEmpty {
+            listOf(ExposureHelper.CameraEntry(
+                "", CameraCharacteristics.LENS_FACING_BACK, "Back (default)"))
+        }
+        val cameraLabel = label("Camera")
+        val storedCameraId = SettingsManager.getCameraId(this)
+        val cameraInitIdx = cameraEntries.indexOfFirst { it.cameraId == storedCameraId }
+            .takeIf { it >= 0 }
+            ?: cameraEntries.indexOfFirst {
+                it.facing == CameraCharacteristics.LENS_FACING_BACK
+            }.takeIf { it >= 0 }
+            ?: 0
+        val cameraSpinner = Spinner(this).apply {
+            val adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                cameraEntries.map { it.label }
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            setAdapter(adapter)
+            setSelection(cameraInitIdx)
+        }
+        // Track which camera's resolutions are currently shown; prevents a redundant
+        // background reload from the initial onItemSelected callback fired by setSelection().
+        var resCurrentCameraId: String? =
+            cameraEntries.getOrNull(cameraInitIdx)?.cameraId?.ifBlank { null }
+
         // ── Resolution spinner ──
         val resLabel = label("Image resolution")
         val savedSize = s.getResolution(this)
@@ -153,16 +191,51 @@ class MainActivity : AppCompatActivity() {
         val resEntries = mutableListOf(ResEntry(null, "Device default (highest)"))
         availableSizes.forEach { resEntries += ResEntry(it, ResolutionHelper.format(it)) }
 
+        val resAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            resEntries.map { it.label }
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+
         val resSpinner = Spinner(this).apply {
-            val adapter = ArrayAdapter(
-                this@MainActivity,
-                android.R.layout.simple_spinner_item,
-                resEntries.map { it.label }
-            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-            setAdapter(adapter)
+            setAdapter(resAdapter)
             val savedIndex = if (savedSize == null) 0
                 else resEntries.indexOfFirst { it.size == savedSize }.takeIf { it >= 0 } ?: 0
             setSelection(savedIndex)
+        }
+
+        // Reload the resolution list whenever the user picks a different camera.
+        cameraSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                val entry = cameraEntries.getOrNull(pos) ?: return
+                val newId = entry.cameraId.ifBlank { null }
+                if (newId == resCurrentCameraId) return  // suppress initial callback
+                resCurrentCameraId = newId
+                resSpinner.isEnabled = false
+                Thread {
+                    val newSizes = ResolutionHelper.getSupportedSizes(
+                        applicationContext, cameraId = newId)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        resEntries.clear()
+                        resEntries += ResEntry(null, "Device default (highest)")
+                        newSizes.forEach { sz -> resEntries += ResEntry(sz, ResolutionHelper.format(sz)) }
+                        resAdapter.clear()
+                        resAdapter.addAll(resEntries.map { it.label })
+                        resSpinner.isEnabled = true
+                        // Preserve the closest previously-saved resolution on the new camera.
+                        val stored = SettingsManager.getResolution(this@MainActivity)
+                        val bestIdx = resEntries.indexOfFirst { it.size == stored }
+                            .takeIf { it >= 0 }
+                            ?: if (newSizes.isNotEmpty())
+                                1 + (newSizes.indices.minByOrNull { i ->
+                                    newSizes[i].penalty(stored) } ?: 0)
+                               else 0
+                        resSpinner.setSelection(bestIdx.coerceIn(0, resEntries.lastIndex))
+                    }
+                }.start()
+            }
         }
 
         val resNote = TextView(this).apply {
@@ -450,6 +523,8 @@ class MainActivity : AppCompatActivity() {
             addView(urlInput)
             addView(intervalLabel)
             addView(intervalInput)
+            addView(cameraLabel)
+            addView(cameraSpinner)
             addView(resLabel)
             addView(resSpinner)
             addView(resNote)
@@ -518,6 +593,8 @@ class MainActivity : AppCompatActivity() {
 
             s.setUploadUrl(this, url)
             s.setIntervalSeconds(this, intervalSecs)
+            s.setCameraId(this, cameraEntries.getOrNull(
+                cameraSpinner.selectedItemPosition)?.cameraId?.ifBlank { null })
             s.setResolution(this, resEntries[resSpinner.selectedItemPosition].size)
             s.setUploadMode(this, modeEntries[modeSpinner.selectedItemPosition].first)
             s.setAfEnabled(this, afCheck.isChecked)
@@ -747,7 +824,7 @@ class MainActivity : AppCompatActivity() {
                 if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                     loadResolutionsAndShowDialog()
                 } else {
-                    showSettingsDialog(emptyList(), null)
+                    showSettingsDialog(availableSizes = emptyList(), evRange = null)
                 }
             }
             REQUEST_LOCATION_FILL -> {

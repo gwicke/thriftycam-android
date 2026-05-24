@@ -206,6 +206,22 @@ object SettingsManager {
     fun setAwbMode(context: Context, mode: Int) =
         prefs(context).edit { putInt(KEY_AWB_MODE, mode) }
 
+    // ── Camera selector ───────────────────────────────────────────────────────
+
+    private const val KEY_CAMERA_ID = "camera_id"   // null = DEFAULT_BACK_CAMERA
+
+    /**
+     * Returns the stored camera ID to open, or null when the user has not chosen
+     * a specific camera (the default back-facing camera is used in that case).
+     */
+    fun getCameraId(context: Context): String? =
+        prefs(context).getString(KEY_CAMERA_ID, null)
+
+    fun setCameraId(context: Context, id: String?) =
+        prefs(context).edit {
+            if (id == null) remove(KEY_CAMERA_ID) else putString(KEY_CAMERA_ID, id)
+        }
+
     // ── AV1 encoding parameters ───────────────────────────────────────────────
 
     fun getAv1Crf(context: Context): Int =
