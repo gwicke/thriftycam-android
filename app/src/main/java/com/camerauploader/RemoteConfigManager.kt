@@ -60,6 +60,7 @@ object RemoteConfigManager {
             put("av1_crf",                   s.getAv1Crf(context))
             put("av1_enc_mode",              s.getAv1EncMode(context))
             put("av1_intra_period",          s.getAv1IntraPeriod(context))
+            put("av1_film_grain_denoise_apply", s.isAv1FilmGrainDenoiseApply(context))
             put("remote_config_enabled",     s.isRemoteConfigEnabled(context))
             put("remote_config_check_hours", s.getRemoteConfigCheckHours(context).toDouble())
             put(KEY_VERSION,                 s.getConfigVersion(context))
@@ -283,6 +284,12 @@ object RemoteConfigManager {
                 sync("av1_intra_period", s.getAv1IntraPeriod(context),
                     obj.getInt("av1_intra_period").coerceAtLeast(1)) {
                     s.setAv1IntraPeriod(context, it)
+                }
+            if (obj.has("av1_film_grain_denoise_apply"))
+                sync("av1_film_grain_denoise_apply",
+                    s.isAv1FilmGrainDenoiseApply(context),
+                    obj.getBoolean("av1_film_grain_denoise_apply")) {
+                    s.setAv1FilmGrainDenoiseApply(context, it)
                 }
             if (obj.has("remote_config_enabled"))
                 sync("remote_config_enabled", s.isRemoteConfigEnabled(context),

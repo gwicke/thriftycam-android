@@ -542,6 +542,11 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF888888.toInt())
             setPadding(0, dpToPx(2), 0, 0)
         }
+        val av1FilmGrainCheck = CheckBox(this).apply {
+            text = "Film grain denoise apply — can improve compression for noisy camera sources."
+            isChecked = s.isAv1FilmGrainDenoiseApply(this@MainActivity)
+            setPadding(0, dpToPx(4), 0, dpToPx(4))
+        }
         val av1Note = TextView(this).apply {
             text = "Changes take effect on next service restart."
             textSize = 11f
@@ -664,6 +669,7 @@ class MainActivity : AppCompatActivity() {
             addView(av1IntraPeriodLabel)
             addView(av1IntraPeriodInput)
             addView(av1IntraPeriodNote)
+            addView(av1FilmGrainCheck)
             addView(av1Note)
             addView(remoteConfigHeader)
             addView(remoteConfigCheck)
@@ -747,6 +753,7 @@ class MainActivity : AppCompatActivity() {
             s.setAv1EncMode(this, encMode)
             val intraPeriod = av1IntraPeriodInput.text.toString().trim().toIntOrNull() ?: 47
             s.setAv1IntraPeriod(this, intraPeriod)
+            s.setAv1FilmGrainDenoiseApply(this, av1FilmGrainCheck.isChecked)
             s.setAuthCredentials(
                 this,
                 userInput.text.toString().trim(),
