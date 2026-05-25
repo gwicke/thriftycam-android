@@ -79,6 +79,7 @@ class Av1Encoder private constructor(
         /**
          * @param crf         AV1 CRF [0..63]; lower = higher quality.
          * @param encMode     SVT-AV1 preset [0..10]; higher = faster.
+         * @param intraPeriodLength Ideally multiple of 8 minus 1
          * @param parallelism 0 = auto, 1..6 increasing parallelism / memory.
          */
         fun open(
@@ -86,15 +87,16 @@ class Av1Encoder private constructor(
             height: Int,
             crf: Int = 37,
             encMode: Int = 10,
+            intraPeriodLength: Int = 47,
             parallelism: Int = 0,
         ): Av1Encoder? {
-            val h = nativeOpen(width, height, crf, encMode, parallelism)
+            val h = nativeOpen(width, height, crf, encMode, intraPeriodLength, parallelism)
             if (h == 0L) return null
             return Av1Encoder(width, height, h)
         }
 
         @JvmStatic private external fun nativeOpen(
-            width: Int, height: Int, crf: Int, encMode: Int, parallelism: Int,
+            width: Int, height: Int, crf: Int, encMode: Int, intraPeriodLength: Int, parallelism: Int,
         ): Long
         @JvmStatic private external fun nativeClose(handle: Long)
         @JvmStatic private external fun nativeSendFirstFrame(
