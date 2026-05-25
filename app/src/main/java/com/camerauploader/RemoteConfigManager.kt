@@ -59,6 +59,7 @@ object RemoteConfigManager {
             put("camera_id", if (camId == null) JSONObject.NULL else camId)
             put("av1_crf",                   s.getAv1Crf(context))
             put("av1_enc_mode",              s.getAv1EncMode(context))
+            put("av1_intra_period",          s.getAv1IntraPeriod(context))
             put("remote_config_enabled",     s.isRemoteConfigEnabled(context))
             put("remote_config_check_hours", s.getRemoteConfigCheckHours(context).toDouble())
             put(KEY_VERSION,                 s.getConfigVersion(context))
@@ -141,6 +142,10 @@ object RemoteConfigManager {
                 JSONObject().apply {
                     put("min", 0); put("max", 10)
                     put("note", "lower = slower/better quality")
+                })
+            put("av1_intra_period",
+                JSONObject().apply {
+                    put("note", "GOP length in frames; should be a multiple of 8 minus 1 (e.g. 47, 119)")
                 })
             put("remote_config_check_hours",
                 JSONObject().apply {
@@ -273,6 +278,11 @@ object RemoteConfigManager {
             if (obj.has("av1_enc_mode"))
                 sync("av1_enc_mode", s.getAv1EncMode(context), obj.getInt("av1_enc_mode")) {
                     s.setAv1EncMode(context, it)
+                }
+            if (obj.has("av1_intra_period"))
+                sync("av1_intra_period", s.getAv1IntraPeriod(context),
+                    obj.getInt("av1_intra_period").coerceAtLeast(1)) {
+                    s.setAv1IntraPeriod(context, it)
                 }
             if (obj.has("remote_config_enabled"))
                 sync("remote_config_enabled", s.isRemoteConfigEnabled(context),

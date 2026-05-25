@@ -527,6 +527,21 @@ class MainActivity : AppCompatActivity() {
             hint      = "10",
             inputType = InputType.TYPE_CLASS_NUMBER
         )
+        val av1IntraPeriodLabel = label("Intra period / GOP length (frames; default 47)")
+        val av1IntraPeriodInput = editText(
+            value     = s.getAv1IntraPeriod(this).toString(),
+            hint      = "47",
+            inputType = InputType.TYPE_CLASS_NUMBER
+        )
+        val av1IntraPeriodNote = TextView(this).apply {
+            text = "Longer GOP lengths can improve compression for scenes with very little " +
+                "change, but require more client side buffering. The default 47 is a good " +
+                "compromise for typical outdoor webcam use cases. Should be a multiple of " +
+                "8 minus 1."
+            textSize = 11f
+            setTextColor(0xFF888888.toInt())
+            setPadding(0, dpToPx(2), 0, 0)
+        }
         val av1Note = TextView(this).apply {
             text = "Changes take effect on next service restart."
             textSize = 11f
@@ -646,6 +661,9 @@ class MainActivity : AppCompatActivity() {
             addView(av1CrfInput)
             addView(av1ModeLabel)
             addView(av1ModeInput)
+            addView(av1IntraPeriodLabel)
+            addView(av1IntraPeriodInput)
+            addView(av1IntraPeriodNote)
             addView(av1Note)
             addView(remoteConfigHeader)
             addView(remoteConfigCheck)
@@ -727,6 +745,8 @@ class MainActivity : AppCompatActivity() {
             s.setAv1Crf(this, crf)
             val encMode = av1ModeInput.text.toString().trim().toIntOrNull() ?: 10
             s.setAv1EncMode(this, encMode)
+            val intraPeriod = av1IntraPeriodInput.text.toString().trim().toIntOrNull() ?: 47
+            s.setAv1IntraPeriod(this, intraPeriod)
             s.setAuthCredentials(
                 this,
                 userInput.text.toString().trim(),

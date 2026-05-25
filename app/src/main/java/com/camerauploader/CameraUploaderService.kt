@@ -208,8 +208,9 @@ class CameraUploaderService : Service(), LifecycleOwner {
         if (av1Encoder == null) {
             val enc = Av1Encoder.open(
                 frame.width, frame.height,
-                crf     = SettingsManager.getAv1Crf(this),
-                encMode = SettingsManager.getAv1EncMode(this),
+                crf               = SettingsManager.getAv1Crf(this),
+                encMode           = SettingsManager.getAv1EncMode(this),
+                intraPeriodLength = SettingsManager.getAv1IntraPeriod(this),
             )
             if (enc == null) {
                 Log.e(TAG, "Failed to open AV1 encoder")

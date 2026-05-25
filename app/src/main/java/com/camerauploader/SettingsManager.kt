@@ -22,6 +22,7 @@ object SettingsManager {
     private const val KEY_DAYLIGHT_OFFSET_MIN = "daylight_offset_minutes"
     private const val KEY_AV1_CRF             = "av1_crf"
     private const val KEY_AV1_ENC_MODE        = "av1_enc_mode"
+    private const val KEY_AV1_INTRA_PERIOD    = "av1_intra_period"
     private const val KEY_LOCATION_LAT        = "location_lat"
     private const val KEY_LOCATION_LON        = "location_lon"
     private const val KEY_NEXT_ALARM_MS         = "next_alarm_ms"
@@ -312,6 +313,13 @@ object SettingsManager {
 
     fun setAv1EncMode(context: Context, mode: Int) =
         prefs(context).edit { putInt(KEY_AV1_ENC_MODE, mode.coerceIn(0, 10)) }
+
+    /** SVT-AV1 intra-period (GOP) length in frames. Default 47. Should be a multiple of 8 minus 1. */
+    fun getAv1IntraPeriod(context: Context): Int =
+        prefs(context).getInt(KEY_AV1_INTRA_PERIOD, 47)
+
+    fun setAv1IntraPeriod(context: Context, frames: Int) =
+        prefs(context).edit { putInt(KEY_AV1_INTRA_PERIOD, frames.coerceAtLeast(1)) }
 
     // ── Next scheduled alarm (wall-clock epoch ms) ────────────────────────────
 
