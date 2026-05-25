@@ -219,7 +219,7 @@ class CameraCaptureManager(
         if (afReady && aeReady) {
             Log.d(TAG, "3A converged in ${elapsed}ms (af=$afState ae=$aeState)")
             captureState.set(State.PICTURE_TAKEN)
-            val isTooDark = iso != null && iso > 1600
+            val isTooDark = iso != null && iso > 2400
                 && exposureTimeNs != null && exposureTimeNs > 33_333_333
             // Preview always shoots. Scheduled captures skip when the scene is too
             // dark, but only if the "skip too dark" preference is enabled.
@@ -228,7 +228,7 @@ class CameraCaptureManager(
                     (isTooDark || aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED)) {
                 updateNotification("Too dark! (iso=$iso exposure=$exposureTimeNs)")
                 Log.d(TAG, "Too dark! (iso=$iso exposure=$exposureTimeNs ae=$aeState)")
-                onCycleComplete()  // terminal for this cycle — release the busy flag
+                shutdownCamera()
                 return
             }
             shootImageAndShutdown(imageCapture)
