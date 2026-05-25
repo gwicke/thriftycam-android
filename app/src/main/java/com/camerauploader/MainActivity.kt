@@ -542,10 +542,17 @@ class MainActivity : AppCompatActivity() {
             setTextColor(0xFF888888.toInt())
             setPadding(0, dpToPx(2), 0, 0)
         }
-        val av1FilmGrainCheck = CheckBox(this).apply {
-            text = "Film grain denoise apply — can improve compression for noisy camera sources."
-            isChecked = s.isAv1FilmGrainDenoiseApply(this@MainActivity)
-            setPadding(0, dpToPx(4), 0, dpToPx(4))
+        val av1FilmGrainLabel = label("Film grain noise (0–255, 0 = disabled; default 0)")
+        val av1FilmGrainInput = editText(
+            value     = s.getAv1FilmGrainNoise(this).toString(),
+            hint      = "0",
+            inputType = InputType.TYPE_CLASS_NUMBER
+        )
+        val av1FilmGrainNote = TextView(this).apply {
+            text = "Can improve compression for noisy camera sources."
+            textSize = 11f
+            setTextColor(0xFF888888.toInt())
+            setPadding(0, dpToPx(2), 0, 0)
         }
         val av1Note = TextView(this).apply {
             text = "Changes take effect on next service restart."
@@ -669,7 +676,9 @@ class MainActivity : AppCompatActivity() {
             addView(av1IntraPeriodLabel)
             addView(av1IntraPeriodInput)
             addView(av1IntraPeriodNote)
-            addView(av1FilmGrainCheck)
+            addView(av1FilmGrainLabel)
+            addView(av1FilmGrainInput)
+            addView(av1FilmGrainNote)
             addView(av1Note)
             addView(remoteConfigHeader)
             addView(remoteConfigCheck)
@@ -753,7 +762,8 @@ class MainActivity : AppCompatActivity() {
             s.setAv1EncMode(this, encMode)
             val intraPeriod = av1IntraPeriodInput.text.toString().trim().toIntOrNull() ?: 47
             s.setAv1IntraPeriod(this, intraPeriod)
-            s.setAv1FilmGrainDenoiseApply(this, av1FilmGrainCheck.isChecked)
+            s.setAv1FilmGrainNoise(this,
+                av1FilmGrainInput.text.toString().trim().toIntOrNull()?.coerceIn(0, 255) ?: 0)
             s.setAuthCredentials(
                 this,
                 userInput.text.toString().trim(),

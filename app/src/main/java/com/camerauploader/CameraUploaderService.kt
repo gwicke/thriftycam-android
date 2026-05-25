@@ -210,8 +210,8 @@ class CameraUploaderService : Service(), LifecycleOwner {
                 frame.width, frame.height,
                 crf               = SettingsManager.getAv1Crf(this),
                 encMode           = SettingsManager.getAv1EncMode(this),
-                intraPeriodLength      = SettingsManager.getAv1IntraPeriod(this),
-                filmGrainDenoiseApply = if (SettingsManager.isAv1FilmGrainDenoiseApply(this)) 1 else 0,
+                intraPeriodLength = SettingsManager.getAv1IntraPeriod(this),
+                filmGrainNoise    = SettingsManager.getAv1FilmGrainNoise(this),
             )
             if (enc == null) {
                 Log.e(TAG, "Failed to open AV1 encoder")

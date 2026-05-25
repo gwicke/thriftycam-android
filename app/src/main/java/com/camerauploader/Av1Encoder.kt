@@ -88,7 +88,7 @@ class Av1Encoder private constructor(
             crf: Int = 37,
             encMode: Int = 10,
             intraPeriodLength: Int = 47,
-            filmGrainDenoiseApply: Int = 0,
+            filmGrainNoise: Int = 0,
             parallelism: Int = 0,
         ): Av1Encoder? {
             val h = nativeOpen(
@@ -97,7 +97,7 @@ class Av1Encoder private constructor(
                 crf,
                 encMode,
                 intraPeriodLength,
-                filmGrainDenoiseApply,
+                filmGrainNoise,
                 parallelism
             )
             if (h == 0L) return null
@@ -110,7 +110,7 @@ class Av1Encoder private constructor(
             crf: Int,
             encMode: Int,
             intraPeriodLength: Int,
-            filmGrainDenoiseApply: Int,
+            filmGrainNoise: Int,
             parallelism: Int,
         ): Long
         @JvmStatic private external fun nativeClose(handle: Long)

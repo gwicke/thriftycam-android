@@ -23,7 +23,7 @@ object SettingsManager {
     private const val KEY_AV1_CRF             = "av1_crf"
     private const val KEY_AV1_ENC_MODE        = "av1_enc_mode"
     private const val KEY_AV1_INTRA_PERIOD    = "av1_intra_period"
-    private const val KEY_AV1_FILM_GRAIN_DENOISE = "av1_film_grain_denoise_apply"
+    private const val KEY_AV1_FILM_GRAIN_NOISE   = "av1_film_grain_noise"
     private const val KEY_LOCATION_LAT        = "location_lat"
     private const val KEY_LOCATION_LON        = "location_lon"
     private const val KEY_NEXT_ALARM_MS         = "next_alarm_ms"
@@ -322,12 +322,12 @@ object SettingsManager {
     fun setAv1IntraPeriod(context: Context, frames: Int) =
         prefs(context).edit { putInt(KEY_AV1_INTRA_PERIOD, frames.coerceAtLeast(1)) }
 
-    /** Apply film-grain denoising before encoding. Can improve compression for noisy sources. Default false. */
-    fun isAv1FilmGrainDenoiseApply(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_AV1_FILM_GRAIN_DENOISE, false)
+    /** SVT-AV1 film grain noise strength (0 = disabled, uint8). Can improve compression for noisy sources. */
+    fun getAv1FilmGrainNoise(context: Context): Int =
+        prefs(context).getInt(KEY_AV1_FILM_GRAIN_NOISE, 0)
 
-    fun setAv1FilmGrainDenoiseApply(context: Context, v: Boolean) =
-        prefs(context).edit { putBoolean(KEY_AV1_FILM_GRAIN_DENOISE, v) }
+    fun setAv1FilmGrainNoise(context: Context, v: Int) =
+        prefs(context).edit { putInt(KEY_AV1_FILM_GRAIN_NOISE, v.coerceIn(0, 255)) }
 
     // ── Next scheduled alarm (wall-clock epoch ms) ────────────────────────────
 

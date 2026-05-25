@@ -46,7 +46,7 @@ Java_com_camerauploader_Av1Encoder_nativeOpen(JNIEnv *env, jclass clazz,
                                               jint width, jint height,
                                               jint crf, jint encMode,
                                               jint intraPeriodLength,
-                                              jint film_grain_denoise_apply,
+                                              jint film_grain_noise,
                                               jint parallelism) {
     Av1EncConfig cfg;
     av1enc_config_default(&cfg);
@@ -55,7 +55,7 @@ Java_com_camerauploader_Av1Encoder_nativeOpen(JNIEnv *env, jclass clazz,
     cfg.crf         = (uint32_t)crf;
     cfg.enc_mode    = (uint32_t)encMode;
     cfg.intra_period_length = (uint32_t)intraPeriodLength;
-    cfg.film_grain_denoise_apply = (uint8_t)film_grain_denoise_apply;
+    cfg.film_grain_noise = (uint8_t)film_grain_noise;
     cfg.parallelism = (uint32_t)parallelism;
     Av1Encoder *enc = av1enc_open(&cfg);
     if (!enc) {
